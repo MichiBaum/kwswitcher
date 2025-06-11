@@ -103,6 +103,9 @@ class WindowsApi {
             // Constants for PeekMessage
             const val PM_REMOVE = 0x0001
 
+            // Window messages
+            const val WM_CLOSE = 0x0010
+
             // Virtual key codes
             const val VK_A = 0x41
             const val VK_B = 0x42
@@ -263,6 +266,18 @@ class WindowsApi {
          * @return If the function succeeds, the return value is a handle to the window that has the specified class name and window name
          */
         fun FindWindowW(lpClassName: String?, lpWindowName: String?): HWND
+
+        /**
+         * Places (posts) a message in the message queue associated with the thread that created
+         * the specified window and returns without waiting for the thread to process the message.
+         *
+         * @param hWnd A handle to the window whose window procedure will receive the message
+         * @param msg The message to be posted
+         * @param wParam Additional message-specific information
+         * @param lParam Additional message-specific information
+         * @return If the function succeeds, the return value is nonzero
+         */
+        fun PostMessageW(hWnd: HWND, msg: Int, wParam: Long, lParam: Long): Boolean
     }
 
     /**
@@ -453,6 +468,26 @@ class WindowsApi {
      */
     fun unregisterHotKey(id: Int): Boolean {
         return User32.INSTANCE.UnregisterHotKey(null, id)
+    }
+
+    /**
+     * Closes the specified window by sending a WM_CLOSE message.
+     *
+     * @param windowInfo The WindowInfo object of the window to close
+     * @return true if the message was successfully posted, false otherwise
+     */
+    fun closeWindow(windowInfo: WindowInfo): Boolean {
+        return User32.INSTANCE.PostMessageW(windowInfo.hwnd, User32.WM_CLOSE, 0, 0)
+    }
+
+    /**
+     * Closes the specified window by sending a WM_CLOSE message.
+     *
+     * @param hwnd The handle of the window to close
+     * @return true if the message was successfully posted, false otherwise
+     */
+    fun closeWindow(hwnd: HWND): Boolean {
+        return User32.INSTANCE.PostMessageW(hwnd, User32.WM_CLOSE, 0, 0)
     }
 
     /**
