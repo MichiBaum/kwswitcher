@@ -58,7 +58,7 @@ fun App() {
             LazyColumn(
                 modifier = Modifier.fillMaxWidth()
             ) {
-                items(openWindows) { windowInfo ->
+                items(openWindows.sortedBy { windowInfo -> windowInfo.title }) { windowInfo ->
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
