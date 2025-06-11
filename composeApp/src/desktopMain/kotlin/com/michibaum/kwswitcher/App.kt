@@ -11,7 +11,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -26,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import org.jetbrains.compose.ui.tooling.preview.Preview
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 @Preview
 fun App() {
@@ -33,6 +36,8 @@ fun App() {
     val windowsApi = remember { WindowsApi() }
     // Use mutableStateOf to make the list of windows reactive
     var openWindows by remember { mutableStateOf(windowsApi.getOpenWindows()) }
+    // State for search query
+    var searchQuery by remember { mutableStateOf("") }
 
     // Refresh the list of windows every 2 seconds
     LaunchedEffect(Unit) {
@@ -55,10 +60,28 @@ fun App() {
                 modifier = Modifier.padding(16.dp)
             )
 
+            // Search field
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                placeholder = { Text("Search by window title") },
+                singleLine = true
+            )
+
             LazyColumn(
                 modifier = Modifier.fillMaxWidth()
             ) {
-                items(openWindows.sortedBy { windowInfo -> windowInfo.title }) { windowInfo ->
+                // Filter windows by search query
+                val filteredWindows = openWindows
+                    .filter { windowInfo -> 
+                        searchQuery.isEmpty() || windowInfo.title.contains(searchQuery, ignoreCase = true) 
+                    }
+                    .sortedBy { windowInfo -> windowInfo.title }
+
+                items(filteredWindows) { windowInfo ->
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -85,6 +108,10 @@ fun App() {
                                 )
                                 Text(
                                     text = "Process ID: ${windowInfo.processId}",
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Text(
+                                    text = "Memory: ${String.format("%.2f", windowInfo.memoryUsageMB)} MB (${String.format("%.1f", windowInfo.memoryUsagePercent)}%)",
                                     style = MaterialTheme.typography.bodyMedium
                                 )
                                 Text(

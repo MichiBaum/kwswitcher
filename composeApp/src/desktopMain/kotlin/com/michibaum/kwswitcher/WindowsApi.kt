@@ -5,6 +5,9 @@ import com.sun.jna.Pointer
 import com.sun.jna.Structure
 import com.sun.jna.WString
 import com.sun.jna.platform.win32.WinDef.HWND
+import com.sun.jna.platform.win32.WinDef.DWORD
+import com.sun.jna.platform.win32.WinNT.HANDLE
+import com.sun.jna.platform.win32.BaseTSD.SIZE_T
 import com.sun.jna.platform.win32.WinUser
 import com.sun.jna.win32.StdCallLibrary
 import java.util.*
@@ -14,6 +17,75 @@ import java.util.*
  * to retrieve information about open windows.
  */
 class WindowsApi {
+    /**
+     * Structure representing memory usage information for a process
+     */
+    @Structure.FieldOrder("cb", "PageFaultCount", "PeakWorkingSetSize", "WorkingSetSize", 
+                         "QuotaPeakPagedPoolUsage", "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage", 
+                         "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage")
+    class PROCESS_MEMORY_COUNTERS : Structure() {
+        @JvmField var cb: DWORD = DWORD(0)
+        @JvmField var PageFaultCount: DWORD = DWORD(0)
+        @JvmField var PeakWorkingSetSize: SIZE_T = SIZE_T(0)
+        @JvmField var WorkingSetSize: SIZE_T = SIZE_T(0)
+        @JvmField var QuotaPeakPagedPoolUsage: SIZE_T = SIZE_T(0)
+        @JvmField var QuotaPagedPoolUsage: SIZE_T = SIZE_T(0)
+        @JvmField var QuotaPeakNonPagedPoolUsage: SIZE_T = SIZE_T(0)
+        @JvmField var QuotaNonPagedPoolUsage: SIZE_T = SIZE_T(0)
+        @JvmField var PagefileUsage: SIZE_T = SIZE_T(0)
+        @JvmField var PeakPagefileUsage: SIZE_T = SIZE_T(0)
+    }
+
+    /**
+     * Interface for the Kernel32 DLL which contains Windows API functions for process management
+     */
+    interface Kernel32 : StdCallLibrary {
+        companion object {
+            val INSTANCE: Kernel32 = Native.load("kernel32", Kernel32::class.java)
+
+            // Process access rights
+            const val PROCESS_QUERY_INFORMATION = 0x0400
+            const val PROCESS_VM_READ = 0x0010
+        }
+
+        /**
+         * Opens an existing local process object.
+         *
+         * @param dwDesiredAccess The access to the process object
+         * @param bInheritHandle If this value is TRUE, processes created by this process will inherit the handle
+         * @param dwProcessId The identifier of the local process to be opened
+         * @return If the function succeeds, the return value is an open handle to the specified process
+         */
+        fun OpenProcess(dwDesiredAccess: Int, bInheritHandle: Boolean, dwProcessId: Int): HANDLE
+
+        /**
+         * Closes an open object handle.
+         *
+         * @param hObject A valid handle to an open object
+         * @return If the function succeeds, the return value is nonzero
+         */
+        fun CloseHandle(hObject: HANDLE): Boolean
+    }
+
+    /**
+     * Interface for the PSAPI DLL which contains Windows API functions for process status
+     */
+    interface Psapi : StdCallLibrary {
+        companion object {
+            val INSTANCE: Psapi = Native.load("psapi", Psapi::class.java)
+        }
+
+        /**
+         * Retrieves information about the memory usage of the specified process.
+         *
+         * @param hProcess A handle to the process
+         * @param ppsmemCounters A pointer to the PROCESS_MEMORY_COUNTERS structure that receives information about the memory usage of the process
+         * @param cb The size of the PROCESS_MEMORY_COUNTERS structure, in bytes
+         * @return If the function succeeds, the return value is nonzero
+         */
+        fun GetProcessMemoryInfo(hProcess: HANDLE, ppsmemCounters: PROCESS_MEMORY_COUNTERS, cb: Int): Boolean
+    }
+
     /**
      * Interface for the User32 DLL which contains Windows API functions
      */
@@ -202,8 +274,71 @@ class WindowsApi {
         val processId: Int,
         val threadId: Int,
         val isVisible: Boolean,
-        val isMinimized: Boolean
+        val isMinimized: Boolean,
+        val memoryUsageMB: Double = 0.0,
+        val memoryUsagePercent: Double = 0.0
     )
+
+    /**
+     * Gets memory usage information for a process
+     *
+     * @param processId The ID of the process to get memory information for
+     * @return A pair containing memory usage in MB and memory usage as a percentage of total system memory,
+     *         or null if the information could not be retrieved
+     */
+    fun getProcessMemoryInfo(processId: Int): Pair<Double, Double>? {
+        var handle: HANDLE? = null
+        try {
+            // Open the process with query information access rights
+            handle = Kernel32.INSTANCE.OpenProcess(
+                Kernel32.PROCESS_QUERY_INFORMATION or Kernel32.PROCESS_VM_READ,
+                false,
+                processId
+            )
+
+            if (handle == null || handle.pointer == Pointer.NULL) {
+                return null
+            }
+
+            // Create a PROCESS_MEMORY_COUNTERS structure
+            val memoryCounters = PROCESS_MEMORY_COUNTERS()
+            memoryCounters.cb = DWORD(memoryCounters.size().toLong())
+
+            // Get memory information
+            val success = Psapi.INSTANCE.GetProcessMemoryInfo(
+                handle,
+                memoryCounters,
+                memoryCounters.size()
+            )
+
+            if (!success) {
+                return null
+            }
+
+            // Calculate memory usage in MB
+            val memoryUsageMB = memoryCounters.WorkingSetSize.toLong().toDouble() / (1024 * 1024)
+
+            // Get total system memory (this is a simplified approach)
+            val totalMemoryMB = Runtime.getRuntime().maxMemory().toDouble() / (1024 * 1024)
+
+            // Calculate memory usage as a percentage
+            val memoryUsagePercent = if (totalMemoryMB > 0) {
+                (memoryUsageMB / totalMemoryMB) * 100
+            } else {
+                0.0
+            }
+
+            return Pair(memoryUsageMB, memoryUsagePercent)
+        } catch (e: Exception) {
+            println("Error getting memory info for process $processId: ${e.message}")
+            return null
+        } finally {
+            // Close the process handle
+            if (handle != null && handle.pointer != Pointer.NULL) {
+                Kernel32.INSTANCE.CloseHandle(handle)
+            }
+        }
+    }
 
     /**
      * Gets a list of all open windows
@@ -228,15 +363,23 @@ class WindowsApi {
 
                     val processIdArray = IntArray(1)
                     val threadId = User32.INSTANCE.GetWindowThreadProcessId(hwnd, processIdArray)
+                    val processId = processIdArray[0]
+
+                    // Get memory usage information
+                    val memoryInfo = getProcessMemoryInfo(processId)
+                    val memoryUsageMB = memoryInfo?.first ?: 0.0
+                    val memoryUsagePercent = memoryInfo?.second ?: 0.0
 
                     windows.add(
                         WindowInfo(
                             hwnd = hwnd,
                             title = title,
-                            processId = processIdArray[0],
+                            processId = processId,
                             threadId = threadId,
                             isVisible = isVisible,
-                            isMinimized = isMinimized
+                            isMinimized = isMinimized,
+                            memoryUsageMB = memoryUsageMB,
+                            memoryUsagePercent = memoryUsagePercent
                         )
                     )
                 }
