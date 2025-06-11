@@ -19,8 +19,8 @@ fun main() = application {
     // Register global hotkey (Alt+Shift+K)
     val hotkeyRegistered = windowsApi.registerHotKey(
         HOTKEY_ID,
-        WindowsApi.User32.MOD_ALT or WindowsApi.User32.MOD_SHIFT,
-        WindowsApi.User32.VK_K
+        User32.MOD_ALT or User32.MOD_SHIFT,
+        User32.VK_K
     )
 
     if (!hotkeyRegistered) {
