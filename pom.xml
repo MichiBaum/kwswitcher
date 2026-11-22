@@ -147,8 +147,39 @@
                         <manifest>
                             <mainClass>${main.class}</mainClass>
                         </manifest>
+                        <manifestEntries>
+                            <Enable-Native-Access>ALL-UNNAMED</Enable-Native-Access>
+                        </manifestEntries>
                     </archive>
                 </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <version>3.7.1</version>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <mainClass>${main.class}</mainClass>
+                        </manifest>
+                        <manifestEntries>
+                            <Enable-Native-Access>ALL-UNNAMED</Enable-Native-Access>
+                        </manifestEntries>
+                    </archive>
+                    <descriptorRefs>
+                        <descriptorRef>jar-with-dependencies</descriptorRef>
+                    </descriptorRefs>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>make-assembly</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>
@@ -159,38 +190,139 @@
             <build>
                 <plugins>
                     <plugin>
-                        <groupId>org.codehaus.mojo</groupId>
-                        <artifactId>exec-maven-plugin</artifactId>
-                        <version>3.5.0</version>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-resources-plugin</artifactId>
+                        <version>3.3.1</version>
+                        <executions>
+                            <execution>
+                                <id>stage-jpackage-input</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>copy-resources</goal>
+                                </goals>
+                                <configuration>
+                                    <outputDirectory>${project.build.directory}/jpackage-input</outputDirectory>
+                                    <resources>
+                                        <resource>
+                                            <directory>${project.build.directory}</directory>
+                                            <includes>
+                                                <include>${project.build.finalName}.jar</include>
+                                            </includes>
+                                        </resource>
+                                    </resources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                        <version>3.1.0</version>
                         <executions>
                             <execution>
                                 <id>jpackage-bundle</id>
                                 <phase>package</phase>
                                 <goals>
-                                    <goal>exec</goal>
+                                    <goal>run</goal>
                                 </goals>
                                 <configuration>
-                                    <executable>jpackage</executable>
-                                    <arguments>
-                                        <argument>--type</argument>
-                                        <argument>app-image</argument>
-                                        <argument>--name</argument>
-                                        <argument>kwswitcher</argument>
-                                        <argument>--input</argument>
-                                        <argument>${project.build.directory}</argument>
-                                        <argument>--main-jar</argument>
-                                        <argument>${project.build.finalName}.jar</argument>
-                                        <argument>--main-class</argument>
-                                        <argument>${main.class}</argument>
-                                        <argument>--dest</argument>
-                                        <argument>${project.build.directory}/dist</argument>
-                                        <argument>--java-options</argument>
-                                        <argument>--enable-native-access=ALL-UNNAMED</argument>
-                                        <argument>--java-options</argument>
-                                        <argument>-Xmx128m</argument>
-                                        <argument>--java-options</argument>
-                                        <argument>-XX:+UseG1GC</argument>
-                                    </arguments>
+                                    <target>
+                                        <exec executable="jpackage" failonerror="true">
+                                            <arg value="--type"/>
+                                            <arg value="app-image"/>
+                                            <arg value="--name"/>
+                                            <arg value="kwswitcher"/>
+                                            <arg value="--input"/>
+                                            <arg value="${project.build.directory}/jpackage-input"/>
+                                            <arg value="--main-jar"/>
+                                            <arg value="${project.build.finalName}.jar"/>
+                                            <arg value="--main-class"/>
+                                            <arg value="${main.class}"/>
+                                            <arg value="--dest"/>
+                                            <arg value="${project.build.directory}/dist"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="--enable-native-access=ALL-UNNAMED"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="-Xmx128m"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="-XX:+UseG1GC"/>
+                                        </exec>
+                                    </target>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>jpackage-installer</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-resources-plugin</artifactId>
+                        <version>3.3.1</version>
+                        <executions>
+                            <execution>
+                                <id>stage-jpackage-input-installer</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>copy-resources</goal>
+                                </goals>
+                                <configuration>
+                                    <outputDirectory>${project.build.directory}/jpackage-input</outputDirectory>
+                                    <resources>
+                                        <resource>
+                                            <directory>${project.build.directory}</directory>
+                                            <includes>
+                                                <include>${project.build.finalName}.jar</include>
+                                            </includes>
+                                        </resource>
+                                    </resources>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                        <version>3.1.0</version>
+                        <executions>
+                            <execution>
+                                <id>jpackage-installer-bundle</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>run</goal>
+                                </goals>
+                                <configuration>
+                                    <target>
+                                        <exec executable="jpackage" failonerror="true">
+                                            <arg value="--type"/>
+                                            <arg value="msi"/>
+                                            <arg value="--name"/>
+                                            <arg value="kwswitcher"/>
+                                            <arg value="--input"/>
+                                            <arg value="${project.build.directory}/jpackage-input"/>
+                                            <arg value="--main-jar"/>
+                                            <arg value="${project.build.finalName}.jar"/>
+                                            <arg value="--main-class"/>
+                                            <arg value="${main.class}"/>
+                                            <arg value="--dest"/>
+                                            <arg value="${project.build.directory}/dist"/>
+                                            <arg value="--app-version"/>
+                                            <arg value="${project.version}"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="--enable-native-access=ALL-UNNAMED"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="-Xmx128m"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="-XX:+UseG1GC"/>
+                                            <arg value="--win-dir-chooser"/>
+                                            <arg value="--win-menu"/>
+                                            <arg value="--win-shortcut"/>
+                                        </exec>
+                                    </target>
                                 </configuration>
                             </execution>
                         </executions>

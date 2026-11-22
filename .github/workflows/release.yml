@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (without leading v), e.g. 1.0.0'
+        required: true
+        default: '1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: Determine version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $v = "${{ github.event.inputs.version }}"
+          } else {
+            $v = "${{ github.ref_name }}" -replace '^v', ''
+          }
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Releasing version $v"
+
+      - name: Run tests
+        run: .\mvnw.cmd -B test
+
+      - name: Set project version
+        run: .\mvnw.cmd -B versions:set -DnewVersion=${{ steps.version.outputs.version }} -DgenerateBackupPoms=false
+
+      - name: Build native app image
+        run: .\mvnw.cmd -B package -Pjpackage -DskipTests
+
+      - name: Zip native app image
+        shell: pwsh
+        run: |
+          $zip = "kwswitcher-${{ steps.version.outputs.version }}-windows-x64.zip"
+          Compress-Archive -Path "target\dist\kwswitcher" -DestinationPath $zip -Force
+          "zip=$zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        id: zip
+
+      - name: Build MSI installer (optional)
+        continue-on-error: true
+        run: .\mvnw.cmd -B package -Pjpackage-installer -DskipTests
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: kwswitcher v${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          files: |
+            ${{ steps.zip.outputs.zip }}
+            target/*-jar-with-dependencies.jar
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
