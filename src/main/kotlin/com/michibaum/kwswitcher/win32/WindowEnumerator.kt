@@ -1,7 +1,9 @@
 package com.michibaum.kwswitcher.win32
 
+import com.michibaum.kwswitcher.config.SwitcherConfig
 import com.michibaum.kwswitcher.domain.WindowHandle
 import com.michibaum.kwswitcher.domain.WindowInfo
+import java.awt.Rectangle
 import java.lang.foreign.Arena
 import java.lang.foreign.MemorySegment
 import java.lang.foreign.ValueLayout
@@ -10,14 +12,24 @@ import java.lang.invoke.MethodType
 import kotlin.io.path.Path
 import kotlin.io.path.nameWithoutExtension
 
+/**
+ * Enumerates visible top-level windows on the current virtual desktop in Z-order (`FR-3`, `FR-4`),
+ * resolving process metadata, minimized state, monitor labels, and ignore-list filtering.
+ */
 class WindowEnumerator(
     private val excludedHwndsProvider: () -> Set<WindowHandle> = { emptySet() },
+    private val configProvider: () -> SwitcherConfig = { SwitcherConfig() },
 ) {
     private val currentProcessId: Long = ProcessHandle.current().pid()
 
+    /**
+     * Enumerates all eligible open windows in top-to-bottom Z-order.
+     */
     fun enumerateOpenWindows(): List<WindowInfo> {
-        val results = mutableListOf<WindowInfo>()
+        val rawWindows = mutableListOf<RawWindowEntry>()
         val excludedHwnds = excludedHwndsProvider()
+        val config = configProvider()
+        val monitors = linkedMapOf<Long, Boolean>() // hMonitor -> isPrimary
 
         Arena.ofConfined().use { arena ->
             val callback = EnumCallback { hwndSegment, _ ->
@@ -28,9 +40,12 @@ class WindowEnumerator(
                         arena = arena,
                         hwnd = hwndSegment,
                         handle = handle,
-                        zOrder = results.size,
-                    )?.let { info ->
-                        results.add(info)
+                        config = config,
+                    )?.let { entry ->
+                        if (entry.hMonitor != 0L && entry.hMonitor !in monitors) {
+                            monitors[entry.hMonitor] = isPrimaryMonitor(arena = arena, hMonitorAddress = entry.hMonitor)
+                        }
+                        rawWindows.add(entry)
                     }
                 }
                 1 // TRUE to continue enumeration
@@ -55,17 +70,77 @@ class WindowEnumerator(
             Win32Bindings.EnumWindows.invokeExact(upcallStub, 0L) as Int
         }
 
-        return results
+        val monitorLabels = buildMonitorLabels(monitors)
+        return rawWindows.mapIndexed { index, entry ->
+            WindowInfo(
+                hwnd = entry.hwnd,
+                title = entry.title,
+                processName = entry.processName,
+                exePath = entry.exePath,
+                zOrder = index,
+                pid = entry.pid,
+                isMinimized = entry.isMinimized,
+                monitorId = monitorLabels[entry.hMonitor].orEmpty(),
+            )
+        }
+    }
+
+    /**
+     * Queries the work area bounds (`rcWork`) of the monitor containing the mouse cursor or foreground window.
+     */
+    fun getActiveMonitorWorkArea(): Rectangle? {
+        Arena.ofConfined().use { arena ->
+            val pointSegment = arena.allocate(Win32Bindings.POINT_LAYOUT)
+            val cursorOk = Win32Bindings.GetCursorPos.invokeExact(pointSegment) as Int
+            val hMonitor: MemorySegment = if (cursorOk != 0) {
+                val packedPoint = pointSegment.get(ValueLayout.JAVA_LONG, 0L)
+                Win32Bindings.MonitorFromPoint.invokeExact(
+                    packedPoint,
+                    Win32Bindings.MONITOR_DEFAULTTONEAREST,
+                ) as MemorySegment
+            } else {
+                val fg = Win32Bindings.GetForegroundWindow.invokeExact() as MemorySegment
+                Win32Bindings.MonitorFromWindow.invokeExact(
+                    fg,
+                    Win32Bindings.MONITOR_DEFAULTTONEAREST,
+                ) as MemorySegment
+            }
+
+            if (hMonitor == MemorySegment.NULL) {
+                return null
+            }
+
+            val monitorInfo = arena.allocate(Win32Bindings.MONITORINFO_LAYOUT)
+            monitorInfo.set(ValueLayout.JAVA_INT, 0L, Win32Bindings.MONITORINFO_LAYOUT.byteSize().toInt())
+            val ok = Win32Bindings.GetMonitorInfoW.invokeExact(hMonitor, monitorInfo) as Int
+            if (ok == 0) {
+                return null
+            }
+
+            // rcWork starts at byte offset 20 (cbSize=4 + rcMonitor=16)
+            val left = monitorInfo.get(ValueLayout.JAVA_INT, 20L)
+            val top = monitorInfo.get(ValueLayout.JAVA_INT, 24L)
+            val right = monitorInfo.get(ValueLayout.JAVA_INT, 28L)
+            val bottom = monitorInfo.get(ValueLayout.JAVA_INT, 32L)
+            val width = right - left
+            val height = bottom - top
+            return if (width > 0 && height > 0) Rectangle(left, top, width, height) else null
+        }
     }
 
     private fun inspectWindow(
         arena: Arena,
         hwnd: MemorySegment,
         handle: WindowHandle,
-        zOrder: Int,
-    ): WindowInfo? {
+        config: SwitcherConfig,
+    ): RawWindowEntry? {
         val visible = Win32Bindings.IsWindowVisible.invokeExact(hwnd) as Int
         if (visible == 0) {
+            return null
+        }
+
+        val enabled = Win32Bindings.IsWindowEnabled.invokeExact(hwnd) as Int
+        if (enabled == 0) {
             return null
         }
 
@@ -96,14 +171,60 @@ class WindowEnumerator(
         val exePath = queryProcessImagePath(arena = arena, pid = pid)
         val processName = extractProcessName(exePath)
 
-        return WindowInfo(
+        if (config.isIgnored(processName = processName, title = title)) {
+            return null
+        }
+
+        val isMinimized = (Win32Bindings.IsIconic.invokeExact(hwnd) as Int) != 0
+        val hMonitorSegment = Win32Bindings.MonitorFromWindow.invokeExact(
+            hwnd,
+            Win32Bindings.MONITOR_DEFAULTTONEAREST,
+        ) as MemorySegment
+
+        return RawWindowEntry(
             hwnd = handle,
             title = title,
             processName = processName,
             exePath = exePath,
-            zOrder = zOrder,
+            pid = pid,
+            isMinimized = isMinimized,
+            hMonitor = hMonitorSegment.address(),
         )
     }
+
+    private fun isPrimaryMonitor(arena: Arena, hMonitorAddress: Long): Boolean {
+        if (hMonitorAddress == 0L) return false
+        val monitorInfo = arena.allocate(Win32Bindings.MONITORINFO_LAYOUT)
+        monitorInfo.set(ValueLayout.JAVA_INT, 0L, Win32Bindings.MONITORINFO_LAYOUT.byteSize().toInt())
+        val ok = Win32Bindings.GetMonitorInfoW.invokeExact(
+            MemorySegment.ofAddress(hMonitorAddress),
+            monitorInfo,
+        ) as Int
+        if (ok == 0) return false
+        val flags = monitorInfo.get(ValueLayout.JAVA_INT, 36L)
+        return (flags and Win32Bindings.MONITORINFOF_PRIMARY) != 0
+    }
+
+    private fun buildMonitorLabels(monitors: Map<Long, Boolean>): Map<Long, String> {
+        if (monitors.isEmpty()) return emptyMap()
+        val ordered = monitors.entries.sortedWith(
+            compareByDescending<Map.Entry<Long, Boolean>> { it.value }
+                .thenBy { it.key },
+        )
+        return ordered.mapIndexed { idx, entry ->
+            entry.key to "Mon ${idx + 1}"
+        }.toMap()
+    }
+
+    private data class RawWindowEntry(
+        val hwnd: WindowHandle,
+        val title: String,
+        val processName: String,
+        val exePath: String,
+        val pid: Int,
+        val isMinimized: Boolean,
+        val hMonitor: Long,
+    )
 
     private fun isWindowCloaked(arena: Arena, hwnd: MemorySegment): Boolean {
         val cloakedSegment = arena.allocate(ValueLayout.JAVA_INT)

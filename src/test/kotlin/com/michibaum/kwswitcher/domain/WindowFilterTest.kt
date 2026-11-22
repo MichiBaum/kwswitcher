@@ -50,4 +50,34 @@ class WindowFilterTest {
         val result = WindowFilter.filter(windows = sampleWindows, query = "nonexistent-window-xyz")
         assertTrue(result.isEmpty())
     }
+
+    @Test
+    fun `ranks exact prefix above word-boundary acronym substring and fuzzy subsequence`() {
+        val candidates = listOf(
+            WindowInfo(WindowHandle(1L), "My Power Document", "notepad", "C:\\notepad.exe", zOrder = 0),
+            WindowInfo(WindowHandle(2L), "Windows PowerShell", "pwsh", "C:\\pwsh.exe", zOrder = 1),
+            WindowInfo(WindowHandle(3L), "PowerToys Settings", "PowerToys", "C:\\PowerToys.exe", zOrder = 2),
+        )
+
+        val ranked = WindowFilter.match(windows = candidates, query = "power")
+        assertEquals(3, ranked.size)
+        // Exact prefix on title/process ("PowerToys") ranks above word-boundary ("Windows PowerShell" / "My Power Document")
+        assertEquals(candidates[2], ranked[0].window)
+        assertEquals(listOf(0..4), ranked[0].titleHighlights)
+    }
+
+    @Test
+    fun `supports camelCase and word-boundary acronym matching with highlight spans`() {
+        val matches = WindowFilter.match(windows = sampleWindows, query = "wp")
+        // "Windows PowerShell" has word-boundary initials 'W' (0) and 'P' (8)
+        assertTrue(matches.isNotEmpty())
+        assertEquals(sampleWindows[1], matches.first().window)
+        assertEquals(listOf(0..0, 8..8), matches.first().titleHighlights)
+    }
+
+    @Test
+    fun `merges overlapping and adjacent highlight ranges`() {
+        val merged = WindowMatch.mergeRanges(listOf(4..7, 0..2, 2..4, 10..12))
+        assertEquals(listOf(0..7, 10..12), merged)
+    }
 }

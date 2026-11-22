@@ -167,12 +167,12 @@ src/main/kotlin/com/michibaum/kwswitcher/
   * Implement Panama FFM bindings (`Win32Bindings`), `WindowEnumerator`, `WindowActivator`, and `KeyboardHook` (`WH_KEYBOARD_LL` with `Alt + Tab` / `Alt + Shift + Tab` interception).
   * Implement `SwitcherStateMachine` supporting the **Immediate Overlay** `QUICK_SWITCH` and `INTERACTIVE_SEARCH` state transitions and case-insensitive substring filtering (`WindowFilter`).
   * Implement the Swing + FlatLaf `SwitcherOverlay` UI and wire everything in `Main.kt`.
-* **Phase 2 — Multi-Token Fuzzy Search, Icons, Badges & Window Actions:**
+* **Phase 2 — Multi-Token Fuzzy Search, Icons, Badges & Window Actions (Completed):**
   * Add `IconExtractor` (`HICON` -> `BufferedImage` -> `ImageIcon` with LRU cache by executable path).
-  * Enrich `WindowInfo` with `pid`, `isMinimized` (`IsIconic`), and `monitorLabel` (`MonitorFromWindow` / `GetMonitorInfoW`), and render `[Minimized]` and `[Mon N]` badges in `WindowListCellRenderer`.
+  * Enrich `WindowInfo` with `pid`, `isMinimized` (`IsIconic`), and `monitorId` (`MonitorFromWindow` / `GetMonitorInfoW`), and render `[Minimized]` and `[Mon N]` badges in `WindowListCellRenderer`.
   * Upgrade `WindowFilter` to a multi-token ranked fuzzy matcher returning matched character spans for bold/colored highlighting in `WindowListCellRenderer`.
   * Add in-switcher window actions: `Ctrl + W` / `Delete` (`WM_CLOSE`), `Ctrl + M` (`SW_MINIMIZE` in-place), and `Ctrl + Shift + W` (two-step confirmed `TerminateProcess`).
-* **Phase 3 — Configuration, Themes, Multi-Monitor Placement, System Tray & Packaging:**
+* **Phase 3 — Configuration, Themes, Multi-Monitor Placement, System Tray & Packaging (Completed):**
   * Implement `SwitcherConfig` & `ConfigRepository` (`%APPDATA%\kwswitcher\config.json`) supporting custom hotkeys, process/title ignore lists, and `DARK` / `LIGHT` / `SYSTEM` theme switching (`ThemeManager`).
   * Center `SwitcherOverlay` on the currently active monitor's work area (`GetCursorPos` / `GetForegroundWindow` -> `MonitorFromWindow`).
   * Add single-instance mutex (`SingleInstanceMutex` via `CreateMutexW`) and `SystemTrayController` (`java.awt.SystemTray`).

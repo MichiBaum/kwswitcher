@@ -1,15 +1,20 @@
 package com.michibaum.kwswitcher.ui
 
 import com.formdev.flatlaf.FlatClientProperties
+import com.michibaum.kwswitcher.config.SwitcherConfig
+import com.michibaum.kwswitcher.config.ThemeManager
+import com.michibaum.kwswitcher.config.ThemePalette
+import com.michibaum.kwswitcher.coordinator.SwitcherMode
 import com.michibaum.kwswitcher.coordinator.SwitcherStateMachine
 import com.michibaum.kwswitcher.coordinator.SwitcherUiState
-import com.michibaum.kwswitcher.domain.WindowInfo
+import com.michibaum.kwswitcher.domain.WindowMatch
+import com.michibaum.kwswitcher.win32.IconExtractor
 import com.michibaum.kwswitcher.win32.WindowEnumerator
 import java.awt.BorderLayout
-import java.awt.Color
 import java.awt.Dimension
 import java.awt.Font
 import java.awt.KeyboardFocusManager
+import java.awt.Rectangle
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
@@ -28,29 +33,44 @@ import javax.swing.SwingUtilities
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 
+/**
+ * Undecorated, always-on-top Swing + FlatLaf overlay dialog for searching, cycling,
+ * and managing open windows (`FR-2`, `FR-6`, `FR-8`).
+ */
 class SwitcherOverlay(
     private val stateMachine: SwitcherStateMachine,
+    private val iconExtractor: IconExtractor = IconExtractor(),
+    private val activeMonitorBoundsProvider: () -> Rectangle? = { null },
+    initialConfig: SwitcherConfig = SwitcherConfig(),
+    initialPalette: ThemePalette = ThemeManager.DARK_PALETTE,
 ) {
-    private val listModel = DefaultListModel<WindowInfo>()
+    private val listModel = DefaultListModel<WindowMatch>()
     private var suppressDocumentEvents = false
+    private val renderer = WindowListCellRenderer(iconExtractor = iconExtractor).apply {
+        config = initialConfig
+        palette = initialPalette
+    }
 
     private val searchField = JTextField().apply {
         font = Font("Segoe UI", Font.PLAIN, 16)
         putClientProperty(FlatClientProperties.PLACEHOLDER_TEXT, "Type to filter open windows...")
         putClientProperty(FlatClientProperties.TEXT_FIELD_SHOW_CLEAR_BUTTON, true)
-        border = BorderFactory.createCompoundBorder(
-            BorderFactory.createMatteBorder(0, 0, 1, 0, Color(0x3C, 0x3C, 0x3C)),
-            BorderFactory.createEmptyBorder(10, 12, 10, 12),
-        )
         focusTraversalKeysEnabled = false
     }
 
     private val windowList = JList(listModel).apply {
         selectionMode = ListSelectionModel.SINGLE_SELECTION
-        cellRenderer = WindowListCellRenderer()
-        background = Color(0x25, 0x25, 0x26)
+        cellRenderer = renderer
         fixedCellHeight = 40
         focusTraversalKeysEnabled = false
+    }
+
+    private val rootPanel = JPanel(BorderLayout(0, 0)).apply {
+        preferredSize = Dimension(720, 440)
+    }
+
+    private val scrollPane = JScrollPane(windowList).apply {
+        border = BorderFactory.createEmptyBorder()
     }
 
     private val dialog = JDialog().apply {
@@ -59,17 +79,6 @@ class SwitcherOverlay(
         isAlwaysOnTop = true
         defaultCloseOperation = JDialog.HIDE_ON_CLOSE
         focusTraversalKeysEnabled = false
-
-        val rootPanel = JPanel(BorderLayout(0, 0)).apply {
-            background = Color(0x1E, 0x1E, 0x1E)
-            border = BorderFactory.createLineBorder(Color(0x45, 0x45, 0x45), 1)
-            preferredSize = Dimension(680, 420)
-        }
-
-        val scrollPane = JScrollPane(windowList).apply {
-            border = BorderFactory.createEmptyBorder()
-            viewport.background = Color(0x25, 0x25, 0x26)
-        }
 
         rootPanel.add(searchField, BorderLayout.NORTH)
         rootPanel.add(scrollPane, BorderLayout.CENTER)
@@ -80,9 +89,45 @@ class SwitcherOverlay(
     }
 
     init {
+        applyPalette(initialPalette)
         configureInputHandlers()
     }
 
+    /**
+     * Updates the active configuration and theme palette on the Swing Event Dispatch Thread.
+     */
+    fun updateConfigAndTheme(config: SwitcherConfig, palette: ThemePalette) {
+        val applyBlock = {
+            renderer.config = config
+            renderer.palette = palette
+            applyPalette(palette)
+            SwingUtilities.updateComponentTreeUI(dialog)
+            applyPalette(palette)
+            windowList.repaint()
+        }
+        if (SwingUtilities.isEventDispatchThread()) {
+            applyBlock()
+        } else {
+            SwingUtilities.invokeLater(applyBlock)
+        }
+    }
+
+    private fun applyPalette(palette: ThemePalette) {
+        rootPanel.background = palette.dialogBackground
+        rootPanel.border = BorderFactory.createLineBorder(palette.dialogBorder, 1)
+        searchField.background = palette.dialogBackground
+        searchField.foreground = palette.titleForeground
+        searchField.border = BorderFactory.createCompoundBorder(
+            BorderFactory.createMatteBorder(0, 0, 1, 0, palette.searchBorder),
+            BorderFactory.createEmptyBorder(10, 12, 10, 12),
+        )
+        windowList.background = palette.listBackground
+        scrollPane.viewport.background = palette.listBackground
+    }
+
+    /**
+     * Renders the latest [state] snapshot on the Swing Event Dispatch Thread.
+     */
     fun render(state: SwitcherUiState) {
         if (!SwingUtilities.isEventDispatchThread()) {
             SwingUtilities.invokeLater { renderOnEdt(state) }
@@ -108,10 +153,12 @@ class SwitcherOverlay(
             }
         }
 
-        updateListItems(state.filteredWindows, state.selectedIndex)
+        renderer.armedKillHwnd = state.armedKillHwnd
+        renderer.multiMonitorDetected = state.multiMonitorDetected
+        updateListItems(state.matches, state.selectedIndex)
 
         if (!dialog.isVisible) {
-            dialog.setLocationRelativeTo(null)
+            positionOnActiveMonitor()
             dialog.isVisible = true
             dialog.toFront()
         }
@@ -120,12 +167,23 @@ class SwitcherOverlay(
         }
     }
 
-    private fun updateListItems(windows: List<WindowInfo>, selectedIndex: Int) {
-        listModel.clear()
-        for (window in windows) {
-            listModel.addElement(window)
+    private fun positionOnActiveMonitor() {
+        val workArea = activeMonitorBoundsProvider()
+        if (workArea != null && workArea.width > 0 && workArea.height > 0) {
+            val x = workArea.x + (workArea.width - dialog.width) / 2
+            val y = workArea.y + (workArea.height - dialog.height) / 2
+            dialog.setLocation(x, y)
+        } else {
+            dialog.setLocationRelativeTo(null)
         }
-        if (windows.isNotEmpty() && selectedIndex in windows.indices) {
+    }
+
+    private fun updateListItems(matches: List<WindowMatch>, selectedIndex: Int) {
+        listModel.clear()
+        for (match in matches) {
+            listModel.addElement(match)
+        }
+        if (matches.isNotEmpty() && selectedIndex in matches.indices) {
             windowList.selectedIndex = selectedIndex
             windowList.ensureIndexIsVisible(selectedIndex)
         } else {
@@ -182,6 +240,30 @@ class SwitcherOverlay(
                         }
                     }
 
+                    KeyEvent.VK_W -> {
+                        if (e.isControlDown && e.isShiftDown) {
+                            e.consume()
+                            stateMachine.onKillSelectedWindowProcess()
+                        } else if (e.isControlDown) {
+                            e.consume()
+                            stateMachine.onCloseSelectedWindow()
+                        }
+                    }
+
+                    KeyEvent.VK_DELETE -> {
+                        if (searchField.text.isEmpty() || e.isControlDown) {
+                            e.consume()
+                            stateMachine.onCloseSelectedWindow()
+                        }
+                    }
+
+                    KeyEvent.VK_M -> {
+                        if (e.isControlDown) {
+                            e.consume()
+                            stateMachine.onMinimizeSelectedWindow()
+                        }
+                    }
+
                     KeyEvent.VK_ENTER -> {
                         e.consume()
                         stateMachine.onConfirmSelection()
@@ -205,7 +287,7 @@ class SwitcherOverlay(
 
         dialog.addWindowFocusListener(object : WindowAdapter() {
             override fun windowLostFocus(e: WindowEvent?) {
-                if ( stateMachine.state.value.mode == com.michibaum.kwswitcher.coordinator.SwitcherMode.INTERACTIVE_SEARCH) {
+                if (stateMachine.state.value.mode == SwitcherMode.INTERACTIVE_SEARCH) {
                     stateMachine.onDismiss()
                 }
             }

@@ -1,5 +1,6 @@
 package com.michibaum.kwswitcher.win32
 
+import com.michibaum.kwswitcher.config.HotkeyConfig
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -13,12 +14,21 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
+/**
+ * Events emitted by the low-level Win32 keyboard hook (`WH_KEYBOARD_LL`).
+ */
 sealed interface HookKeyEvent {
     data class AltTabPressed(val reverse: Boolean) : HookKeyEvent
     data object AltReleased : HookKeyEvent
 }
 
-class KeyboardHook : AutoCloseable {
+/**
+ * Dedicated OS thread running a Win32 message loop (`GetMessageW` / `DispatchMessageW`)
+ * with a `WH_KEYBOARD_LL` upcall stub to intercept the configured switcher hotkey (`FR-1`).
+ */
+class KeyboardHook(
+    private val hotkeyConfigProvider: () -> HotkeyConfig = { HotkeyConfig() },
+) : AutoCloseable {
     private val eventChannel = Channel<HookKeyEvent>(Channel.UNLIMITED)
     val events: Flow<HookKeyEvent> = eventChannel.receiveAsFlow()
 
@@ -26,14 +36,17 @@ class KeyboardHook : AutoCloseable {
     private val hookThreadId = AtomicInteger(0)
 
     @Volatile
-    private var altHeld: Boolean = false
+    private var modifierHeld: Boolean = false
 
     @Volatile
-    private var shiftHeld: Boolean = false
+    private var reverseModifierHeld: Boolean = false
 
     @Volatile
     private var hookThread: Thread? = null
 
+    /**
+     * Starts the dedicated Win32 hook thread and installs the `WH_KEYBOARD_LL` hook.
+     */
     fun start(): Boolean {
         if (!running.compareAndSet(false, true)) {
             return true
@@ -63,7 +76,7 @@ class KeyboardHook : AutoCloseable {
         val threadId = Win32Bindings.GetCurrentThreadId.invokeExact() as Int
         hookThreadId.set(threadId)
 
-        Arena.ofConfined().use { arena ->
+        Arena.ofShared().use { arena ->
             val callback = HookCallback { nCode, wParam, lParam ->
                 handleLowLevelKey(nCode = nCode, wParam = wParam, lParam = lParam)
             }
@@ -155,50 +168,43 @@ class KeyboardHook : AutoCloseable {
         vkCode: Int,
         flags: Int,
     ): Boolean {
+        val hotkey = hotkeyConfigProvider()
         val isKeyDown = message == Win32Bindings.WM_KEYDOWN || message == Win32Bindings.WM_SYSKEYDOWN
         val isKeyUp = message == Win32Bindings.WM_KEYUP || message == Win32Bindings.WM_SYSKEYUP
 
-        when (vkCode) {
-            Win32Bindings.VK_MENU,
-            Win32Bindings.VK_LMENU,
-            Win32Bindings.VK_RMENU,
-            -> {
-                if (isKeyDown) {
-                    altHeld = true
-                } else if (isKeyUp && altHeld) {
-                    altHeld = false
-                    eventChannel.trySend(HookKeyEvent.AltReleased)
-                }
-                return false
+        if (vkCode in hotkey.modifierVkCodes()) {
+            if (isKeyDown) {
+                modifierHeld = true
+            } else if (isKeyUp && modifierHeld) {
+                modifierHeld = false
+                eventChannel.trySend(HookKeyEvent.AltReleased)
             }
+            return false
+        }
 
-            Win32Bindings.VK_SHIFT,
-            Win32Bindings.VK_LSHIFT,
-            Win32Bindings.VK_RSHIFT,
-            -> {
-                if (isKeyDown) {
-                    shiftHeld = true
-                } else if (isKeyUp) {
-                    shiftHeld = false
-                }
-                return false
+        if (vkCode in hotkey.reverseModifierVkCodes()) {
+            if (isKeyDown) {
+                reverseModifierHeld = true
+            } else if (isKeyUp) {
+                reverseModifierHeld = false
             }
+            return false
+        }
 
-            Win32Bindings.VK_TAB -> {
-                val altDownFlag = (flags and Win32Bindings.LLKHF_ALTDOWN) != 0
-                if (isKeyDown && (altHeld || altDownFlag)) {
-                    altHeld = true
-                    val reverse = shiftHeld || isShiftCurrentlyDown()
-                    eventChannel.trySend(HookKeyEvent.AltTabPressed(reverse = reverse))
-                    return true
-                }
+        if (vkCode == hotkey.triggerVkCode()) {
+            val altDownFlag = hotkey.isAltModifier && (flags and Win32Bindings.LLKHF_ALTDOWN) != 0
+            if (isKeyDown && (modifierHeld || altDownFlag)) {
+                modifierHeld = true
+                val reverse = reverseModifierHeld || isKeyCurrentlyDown(hotkey.reverseModifierPrimaryVk())
+                eventChannel.trySend(HookKeyEvent.AltTabPressed(reverse = reverse))
+                return true
             }
         }
         return false
     }
 
-    private fun isShiftCurrentlyDown(): Boolean {
-        val state = Win32Bindings.GetAsyncKeyState.invokeExact(Win32Bindings.VK_SHIFT) as Short
+    private fun isKeyCurrentlyDown(vkCode: Int): Boolean {
+        val state = Win32Bindings.GetAsyncKeyState.invokeExact(vkCode) as Short
         return (state.toInt() and 0x8000) != 0
     }
 

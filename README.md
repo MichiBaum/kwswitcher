@@ -15,3 +15,9 @@ See [`kwswitcher_specification.md`](kwswitcher_specification.md) for the full so
 ```powershell
 .\mvnw.cmd exec:exec
 ```
+
+## Package Native Windows Bundle (`jpackage`)
+
+```powershell
+.\mvnw.cmd package -Pjpackage
+```

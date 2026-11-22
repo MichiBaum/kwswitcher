@@ -2,42 +2,63 @@ package com.michibaum.kwswitcher.coordinator
 
 import com.michibaum.kwswitcher.domain.WindowFilter
 import com.michibaum.kwswitcher.domain.WindowInfo
+import com.michibaum.kwswitcher.domain.WindowMatch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
+/**
+ * Outcome returned by state-machine actions that trigger native window side effects.
+ */
 sealed interface SwitcherActionResult {
     data object None : SwitcherActionResult
     data class ActivateWindow(val target: WindowInfo) : SwitcherActionResult
+    data class CloseWindow(val target: WindowInfo) : SwitcherActionResult
+    data class MinimizeWindow(val target: WindowInfo) : SwitcherActionResult
+    data class KillArmed(val target: WindowInfo) : SwitcherActionResult
+    data class TerminateProcess(val target: WindowInfo) : SwitcherActionResult
     data object Dismissed : SwitcherActionResult
 }
 
+/**
+ * Coordinates the `HIDDEN` <-> `QUICK_SWITCH` <-> `INTERACTIVE_SEARCH` state machine
+ * and dispatches window activation, closing, minimizing, and termination actions (`FR-2`, `FR-6`).
+ */
 class SwitcherStateMachine(
     private val enumerateWindows: () -> List<WindowInfo>,
     private val onActivateWindow: (WindowInfo) -> Unit = {},
+    private val onCloseWindow: (WindowInfo) -> Unit = {},
+    private val onMinimizeWindow: (WindowInfo) -> Unit = {},
+    private val onTerminateProcess: (WindowInfo) -> Unit = {},
 ) {
     private val _state = MutableStateFlow(SwitcherUiState())
     val state: StateFlow<SwitcherUiState> = _state.asStateFlow()
 
+    /**
+     * Handles the primary hotkey press (`Alt + Tab` or `Alt + Shift + Tab`).
+     */
     fun onAltTabPressed(reverse: Boolean = false): SwitcherUiState {
         var updatedState = _state.value
         _state.update { current ->
             val next = when (current.mode) {
                 SwitcherMode.HIDDEN -> {
                     val windows = enumerateWindows()
+                    val matches = windows.map { WindowMatch(window = it, score = 0) }
                     val initialIndex = when {
-                        windows.isEmpty() -> 0
-                        reverse -> windows.lastIndex
-                        windows.size > 1 -> 1
+                        matches.isEmpty() -> 0
+                        reverse -> matches.lastIndex
+                        matches.size > 1 -> 1
                         else -> 0
                     }
                     SwitcherUiState(
                         mode = SwitcherMode.QUICK_SWITCH,
                         query = "",
                         allWindows = windows,
-                        filteredWindows = windows,
+                        matches = matches,
                         selectedIndex = initialIndex,
+                        armedKillHwnd = null,
+                        multiMonitorDetected = hasMultipleMonitors(windows),
                     )
                 }
 
@@ -46,10 +67,13 @@ class SwitcherStateMachine(
                 -> {
                     val nextIndex = cycleIndex(
                         currentIndex = current.selectedIndex,
-                        count = current.filteredWindows.size,
+                        count = current.matches.size,
                         delta = if (reverse) -1 else 1,
                     )
-                    current.copy(selectedIndex = nextIndex)
+                    current.copy(
+                        selectedIndex = nextIndex,
+                        armedKillHwnd = null,
+                    )
                 }
             }
             updatedState = next
@@ -58,6 +82,32 @@ class SwitcherStateMachine(
         return updatedState
     }
 
+    /**
+     * Opens the switcher directly in [SwitcherMode.INTERACTIVE_SEARCH] mode (e.g., from the System Tray).
+     */
+    fun onShowInteractive(): SwitcherUiState {
+        var updatedState = _state.value
+        _state.update {
+            val windows = enumerateWindows()
+            val matches = windows.map { WindowMatch(window = it, score = 0) }
+            val next = SwitcherUiState(
+                mode = SwitcherMode.INTERACTIVE_SEARCH,
+                query = "",
+                allWindows = windows,
+                matches = matches,
+                selectedIndex = 0,
+                armedKillHwnd = null,
+                multiMonitorDetected = hasMultipleMonitors(windows),
+            )
+            updatedState = next
+            next
+        }
+        return updatedState
+    }
+
+    /**
+     * Handles release of the hotkey modifier (`Alt`). Activates the selected window only in `QUICK_SWITCH` mode.
+     */
     fun onAltReleased(): SwitcherActionResult {
         val current = _state.value
         if (current.mode != SwitcherMode.QUICK_SWITCH) {
@@ -73,6 +123,9 @@ class SwitcherStateMachine(
         }
     }
 
+    /**
+     * Locks the session in `INTERACTIVE_SEARCH` mode and filters/ranks windows against [newQuery].
+     */
     fun onQueryChanged(newQuery: String): SwitcherUiState {
         var updatedState = _state.value
         _state.update { current ->
@@ -80,12 +133,13 @@ class SwitcherStateMachine(
                 updatedState = current
                 return@update current
             }
-            val filtered = WindowFilter.filter(windows = current.allWindows, query = newQuery)
+            val matches = WindowFilter.match(windows = current.allWindows, query = newQuery)
             val next = current.copy(
                 mode = SwitcherMode.INTERACTIVE_SEARCH,
                 query = newQuery,
-                filteredWindows = filtered,
+                matches = matches,
                 selectedIndex = 0,
+                armedKillHwnd = null,
             )
             updatedState = next
             next
@@ -93,6 +147,9 @@ class SwitcherStateMachine(
         return updatedState
     }
 
+    /**
+     * Moves the selection index by [delta] with wrap-around, clearing any armed kill confirmation.
+     */
     fun onMoveSelection(delta: Int, lockInteractive: Boolean = true): SwitcherUiState {
         var updatedState = _state.value
         _state.update { current ->
@@ -102,13 +159,14 @@ class SwitcherStateMachine(
             }
             val nextIndex = cycleIndex(
                 currentIndex = current.selectedIndex,
-                count = current.filteredWindows.size,
+                count = current.matches.size,
                 delta = delta,
             )
             val nextMode = if (lockInteractive) SwitcherMode.INTERACTIVE_SEARCH else current.mode
             val next = current.copy(
                 mode = nextMode,
                 selectedIndex = nextIndex,
+                armedKillHwnd = null,
             )
             updatedState = next
             next
@@ -116,6 +174,106 @@ class SwitcherStateMachine(
         return updatedState
     }
 
+    /**
+     * Gracefully closes the currently selected window (`Ctrl + W` or `Delete`) without dismissing the overlay (`FR-6`).
+     */
+    fun onCloseSelectedWindow(): SwitcherActionResult {
+        val current = _state.value
+        if (current.mode == SwitcherMode.HIDDEN) {
+            return SwitcherActionResult.None
+        }
+        val target = current.selectedWindow ?: return SwitcherActionResult.None
+        onCloseWindow(target)
+
+        _state.update { state ->
+            val remainingWindows = state.allWindows.filterNot { it.hwnd == target.hwnd }
+            val remainingMatches = WindowFilter.match(windows = remainingWindows, query = state.query)
+            val clampedIndex = clampIndex(state.selectedIndex, remainingMatches.size)
+            state.copy(
+                mode = SwitcherMode.INTERACTIVE_SEARCH,
+                allWindows = remainingWindows,
+                matches = remainingMatches,
+                selectedIndex = clampedIndex,
+                armedKillHwnd = null,
+            )
+        }
+        return SwitcherActionResult.CloseWindow(target)
+    }
+
+    /**
+     * Minimizes the currently selected window in-place (`Ctrl + M`) without dismissing the overlay (`FR-6`).
+     */
+    fun onMinimizeSelectedWindow(): SwitcherActionResult {
+        val current = _state.value
+        if (current.mode == SwitcherMode.HIDDEN) {
+            return SwitcherActionResult.None
+        }
+        val target = current.selectedWindow ?: return SwitcherActionResult.None
+        onMinimizeWindow(target)
+
+        _state.update { state ->
+            val updatedAll = state.allWindows.map { win ->
+                if (win.hwnd == target.hwnd) win.copy(isMinimized = true) else win
+            }
+            val updatedMatches = state.matches.map { match ->
+                if (match.window.hwnd == target.hwnd) {
+                    match.copy(window = match.window.copy(isMinimized = true))
+                } else {
+                    match
+                }
+            }
+            state.copy(
+                mode = SwitcherMode.INTERACTIVE_SEARCH,
+                allWindows = updatedAll,
+                matches = updatedMatches,
+                armedKillHwnd = null,
+            )
+        }
+        return SwitcherActionResult.MinimizeWindow(target)
+    }
+
+    /**
+     * Two-step process termination (`Ctrl + Shift + W`): first press arms confirmation on the selected window;
+     * second consecutive press terminates the owning process and removes its windows from the list (`FR-6`).
+     */
+    fun onKillSelectedWindowProcess(): SwitcherActionResult {
+        val current = _state.value
+        if (current.mode == SwitcherMode.HIDDEN) {
+            return SwitcherActionResult.None
+        }
+        val target = current.selectedWindow ?: return SwitcherActionResult.None
+
+        if (current.armedKillHwnd != target.hwnd) {
+            _state.update { state ->
+                state.copy(
+                    mode = SwitcherMode.INTERACTIVE_SEARCH,
+                    armedKillHwnd = target.hwnd,
+                )
+            }
+            return SwitcherActionResult.KillArmed(target)
+        }
+
+        onTerminateProcess(target)
+        _state.update { state ->
+            val remainingWindows = state.allWindows.filterNot { win ->
+                win.hwnd == target.hwnd || (target.pid > 0 && win.pid == target.pid)
+            }
+            val remainingMatches = WindowFilter.match(windows = remainingWindows, query = state.query)
+            val clampedIndex = clampIndex(state.selectedIndex, remainingMatches.size)
+            state.copy(
+                mode = SwitcherMode.INTERACTIVE_SEARCH,
+                allWindows = remainingWindows,
+                matches = remainingMatches,
+                selectedIndex = clampedIndex,
+                armedKillHwnd = null,
+            )
+        }
+        return SwitcherActionResult.TerminateProcess(target)
+    }
+
+    /**
+     * Activates the currently selected window (`Enter` or mouse click) and hides the overlay.
+     */
     fun onConfirmSelection(): SwitcherActionResult {
         val current = _state.value
         if (current.mode == SwitcherMode.HIDDEN) {
@@ -131,6 +289,9 @@ class SwitcherStateMachine(
         }
     }
 
+    /**
+     * Cancels the switcher session (`Esc` or focus loss) without switching windows.
+     */
     fun onDismiss(): SwitcherActionResult {
         val current = _state.value
         if (current.mode == SwitcherMode.HIDDEN) {
@@ -148,4 +309,12 @@ class SwitcherStateMachine(
         if (count <= 0) return 0
         return ((currentIndex + delta) % count + count) % count
     }
+
+    private fun clampIndex(index: Int, count: Int): Int {
+        if (count <= 0) return 0
+        return index.coerceIn(0, count - 1)
+    }
+
+    private fun hasMultipleMonitors(windows: List<WindowInfo>): Boolean =
+        windows.mapNotNull { it.monitorId.takeIf(String::isNotBlank) }.distinct().size > 1
 }
