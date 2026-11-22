@@ -1,15 +1,17 @@
-# This is a Kotlin Multiplatform project targeting Desktop.
+# Kotlin Switcheroo (`kwswitcher`)
 
-* `/composeApp` is for code that will be shared across your Compose Multiplatform applications.
-  It contains several subfolders:
-  - `commonMain` is for code that’s common for all targets.
-  - Other folders are for Kotlin code that will be compiled for only the platform indicated in the folder name.
-    For example, if you want to use Apple’s CoreCrypto for the iOS part of your Kotlin app,
-    `iosMain` would be the right folder for such calls.
+A lightweight, keyboard-driven window switcher for Windows built with **Kotlin (JDK 25)**, **Swing + FlatLaf**, and **Project Panama Foreign Function & Memory API (`java.lang.foreign`)**.
 
+See [`kwswitcher_specification.md`](kwswitcher_specification.md) for the full software requirements and architecture specification.
 
-## Create Executable
+## Build & Test
 
-```bash
-./gradlew createDistributable
+```powershell
+.\mvnw.cmd test
+```
+
+## Run Application
+
+```powershell
+.\mvnw.cmd exec:exec
 ```
