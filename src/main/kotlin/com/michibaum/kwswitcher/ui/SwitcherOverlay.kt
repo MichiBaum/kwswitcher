@@ -29,6 +29,7 @@ import javax.swing.JPanel
 import javax.swing.JScrollPane
 import javax.swing.JTextField
 import javax.swing.ListSelectionModel
+import javax.swing.ScrollPaneConstants
 import javax.swing.SwingUtilities
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
@@ -58,7 +59,9 @@ class SwitcherOverlay(
         focusTraversalKeysEnabled = false
     }
 
-    private val windowList = JList(listModel).apply {
+    private val windowList = object : JList<WindowMatch>(listModel) {
+        override fun getScrollableTracksViewportWidth(): Boolean = true
+    }.apply {
         selectionMode = ListSelectionModel.SINGLE_SELECTION
         cellRenderer = renderer
         fixedCellHeight = 40
@@ -71,6 +74,7 @@ class SwitcherOverlay(
 
     private val scrollPane = JScrollPane(windowList).apply {
         border = BorderFactory.createEmptyBorder()
+        horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
     }
 
     private val dialog = JDialog().apply {

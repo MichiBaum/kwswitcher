@@ -36,7 +36,7 @@ fun main() {
     }
 
     val configRepository = ConfigRepository()
-    val configRef = AtomicReference<SwitcherConfig>(configRepository.loadOrCreate())
+    val configRef = AtomicReference(configRepository.loadOrCreate())
     val initialPalette = ThemeManager.applyTheme(configRef.get().theme)
 
     val iconExtractor = IconExtractor()
