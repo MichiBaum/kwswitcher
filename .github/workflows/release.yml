@@ -45,7 +45,7 @@ jobs:
         run: .\mvnw.cmd -B test
 
       - name: Set project version
-        run: .\mvnw.cmd -B versions:set -DnewVersion=${{ steps.version.outputs.version }} -DgenerateBackupPoms=false
+        run: .\mvnw.cmd -B versions:set "-DnewVersion=${{ steps.version.outputs.version }}" -DgenerateBackupPoms=false
 
       - name: Build native app image
         run: .\mvnw.cmd -B package -Pjpackage -DskipTests
