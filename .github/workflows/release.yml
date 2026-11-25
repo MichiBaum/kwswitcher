@@ -3,11 +3,11 @@ name: Release
 on:
   push:
     tags:
-      - '*'
+      - '[0-9]+.[0-9]+.[0-9]+'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (without leading v), e.g. 1.0.0'
+        description: 'Release version matching selected tag ref (MAJOR.MINOR.PATCH), e.g. 1.1.0'
         required: true
         default: '1.0.0'
 
@@ -32,14 +32,23 @@ jobs:
       - name: Determine and validate version
         id: version
         shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version || github.event.inputs.version }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-            $v = "${{ github.event.inputs.version }}"
-          } else {
-            $v = "${{ github.ref_name }}" -replace '^v', ''
+          $raw = if ($env:EVENT_NAME -eq "workflow_dispatch") { $env:INPUT_VERSION } else { $env:REF_NAME }
+          $v = ([string]$raw).Trim()
+          if ($v -notmatch '^[1-9]\d*\.\d+\.\d+$' -or -not [regex]::IsMatch($v, '\A[1-9][0-9]*\.[0-9]+\.[0-9]+\z')) {
+            throw "Release version '$v' must match numeric MAJOR.MINOR.PATCH without leading 'v' and with MAJOR >= 1 for Windows MSI compatibility."
           }
-          if ($v -notmatch '^[1-9]\d*\.\d+\.\d+$') {
-            throw "Release version '$v' must match numeric MAJOR.MINOR.PATCH with MAJOR >= 1 for Windows MSI compatibility."
+          if ($env:EVENT_NAME -eq "workflow_dispatch") {
+            $refType = [string]$env:REF_TYPE
+            $refName = [string]$env:REF_NAME
+            if ($refType -cne "tag" -or $refName -cne $v) {
+              throw "Manual release dispatch must run from matching tag ref '$v' (got ref_type='$refType', ref_name='$refName')."
+            }
           }
           "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Write-Host "Releasing version $v"
@@ -117,8 +126,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: kwswitcher v${{ steps.version.outputs.version }}
+          tag_name: ${{ steps.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: kwswitcher ${{ steps.version.outputs.version }}
           generate_release_notes: true
           files: |
             ${{ steps.artifacts.outputs.zip }}

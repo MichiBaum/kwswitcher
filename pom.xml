@@ -23,6 +23,8 @@
         <kover.version>0.9.8</kover.version>
         <detekt.version>2.0.0-alpha.6</detekt.version>
         <detekt.skip>false</detekt.skip>
+        <gitflow.version>1.21.0</gitflow.version>
+        <gitflow.mvnExecutable>${project.basedir}/mvnw</gitflow.mvnExecutable>
         <argLine></argLine>
         <main.class>com.michibaum.kwswitcher.MainKt</main.class>
 
@@ -287,10 +289,45 @@
                     </execution>
                 </executions>
             </plugin>
+
+            <plugin>
+                <groupId>com.amashchenko.maven.plugin</groupId>
+                <artifactId>gitflow-maven-plugin</artifactId>
+                <version>${gitflow.version}</version>
+                <configuration>
+                    <mvnExecutable>${gitflow.mvnExecutable}</mvnExecutable>
+                    <skipFeatureVersion>true</skipFeatureVersion>
+                    <skipTestProject>true</skipTestProject>
+                    <preFeatureFinishGoals>verify</preFeatureFinishGoals>
+                    <preReleaseGoals>verify</preReleaseGoals>
+                    <preHotfixGoals>verify</preHotfixGoals>
+                    <digitsOnlyDevVersion>false</digitsOnlyDevVersion>
+                    <gitFlowConfig>
+                        <productionBranch>main</productionBranch>
+                        <developmentBranch>develop</developmentBranch>
+                        <featureBranchPrefix>feature/</featureBranchPrefix>
+                        <releaseBranchPrefix>release/</releaseBranchPrefix>
+                        <hotfixBranchPrefix>hotfix/</hotfixBranchPrefix>
+                        <supportBranchPrefix>support/</supportBranchPrefix>
+                        <origin>origin</origin>
+                    </gitFlowConfig>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 
     <profiles>
+        <profile>
+            <id>windows-mvnw</id>
+            <activation>
+                <os>
+                    <family>windows</family>
+                </os>
+            </activation>
+            <properties>
+                <gitflow.mvnExecutable>${project.basedir}\mvnw.cmd</gitflow.mvnExecutable>
+            </properties>
+        </profile>
         <profile>
             <id>jpackage</id>
             <build>
