@@ -150,4 +150,58 @@ class SwitcherStateMachineTest {
         assertEquals(listOf(windows[0]), sm.state.value.filteredWindows)
         assertFalse(sm.state.value.selectedWindow!!.isMinimized) // windows[0] is not minimized
     }
+
+    @Test
+    fun `onAppendQueryChar and onBackspaceQuery lock INTERACTIVE_SEARCH filter windows and ignore AltReleased`() {
+        val activated = mutableListOf<WindowInfo>()
+        val sm = SwitcherStateMachine(
+            enumerateWindows = { windows },
+            onActivateWindow = { activated.add(it) },
+        )
+
+        // No-op while HIDDEN
+        assertEquals(SwitcherMode.HIDDEN, sm.onAppendQueryChar('t').mode)
+        assertEquals(SwitcherMode.HIDDEN, sm.onBackspaceQuery().mode)
+
+        // Open QUICK_SWITCH (selectedIndex = 1) and arm kill on windows[1]
+        sm.onAltTabPressed(reverse = false)
+        sm.onKillSelectedWindowProcess()
+        assertEquals(windows[1].hwnd, sm.state.value.armedKillHwnd)
+
+        // Appending characters locks INTERACTIVE_SEARCH, resets selectedIndex = 0, disarms kill, and filters
+        val afterT = sm.onAppendQueryChar('t')
+        assertEquals(SwitcherMode.INTERACTIVE_SEARCH, afterT.mode)
+        assertEquals("t", afterT.query)
+        assertEquals(0, afterT.selectedIndex)
+        assertNull(afterT.armedKillHwnd)
+
+        val afterTh = sm.onAppendQueryChar('h')
+        assertEquals("th", afterTh.query)
+        assertEquals(listOf(windows[2]), afterTh.filteredWindows)
+
+        // Subsequent Alt release does not close or activate
+        assertEquals(SwitcherActionResult.None, sm.onAltReleased())
+        assertTrue(activated.isEmpty())
+        assertEquals(SwitcherMode.INTERACTIVE_SEARCH, sm.state.value.mode)
+
+        // Backspace removes trailing characters and safely handles already-empty query
+        assertEquals("t", sm.onBackspaceQuery().query)
+        val cleared = sm.onBackspaceQuery()
+        assertEquals("", cleared.query)
+        assertEquals(3, cleared.filteredWindows.size)
+        assertEquals("", sm.onBackspaceQuery().query)
+    }
+
+    @Test
+    fun `onBackspaceQuery in QUICK_SWITCH with empty query still locks INTERACTIVE_SEARCH`() {
+        val sm = SwitcherStateMachine(enumerateWindows = { windows })
+        sm.onAltTabPressed(reverse = false)
+        assertEquals(SwitcherMode.QUICK_SWITCH, sm.state.value.mode)
+
+        val locked = sm.onBackspaceQuery()
+        assertEquals(SwitcherMode.INTERACTIVE_SEARCH, locked.mode)
+        assertEquals("", locked.query)
+        assertEquals(0, locked.selectedIndex)
+        assertEquals(SwitcherActionResult.None, sm.onAltReleased())
+    }
 }

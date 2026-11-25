@@ -19,7 +19,7 @@ Pressing `Alt+Tab` (or your configured hotkey) opens the switcher immediately in
 
 At any moment while the overlay is open, performing any interactive action transitions and **locks** the session into **`INTERACTIVE_SEARCH`** mode:
 
-* Typing any search character into the filter box
+* Typing any search character into the filter box (including immediately while `Alt` is still held down right after `Alt+Tab`)
 * Pressing `Up`, `Down`, `Ctrl+N`, or `Ctrl+P`
 * Triggering an in-switcher window action (`Ctrl+W`, `Delete`, `Ctrl+M`, or `Ctrl+Shift+W`)
 * Opening the overlay via **Show Switcher** (or clicking the icon) in the System Tray
@@ -43,7 +43,7 @@ Once locked in **`INTERACTIVE_SEARCH`** mode, **releasing `Alt` does not close t
 
 | Shortcut / Input | Mode Effect | Action |
 | :--- | :--- | :--- |
-| *Type any text* | Locks `INTERACTIVE_SEARCH` | Filters and ranks open windows in real time; resets selection to the top match (`index 0`). |
+| *Type any text* | Locks `INTERACTIVE_SEARCH` | Filters and ranks open windows in real time; resets selection to the top match (`index 0`). Works both after releasing `Alt` (including `AltGr` international characters) and immediately while holding `Alt` (`A`–`Z`, `0`–`9`, `Space`, and `Backspace`). |
 | `Down` / `Up` | Locks `INTERACTIVE_SEARCH` | Move selection down or up with wrap-around. |
 | `Ctrl+N` / `Ctrl+P` | Locks `INTERACTIVE_SEARCH` | Move selection next (down) or previous (up) with wrap-around. |
 | `Tab` / `Shift+Tab` | Preserves current mode | Cycle selection forward or backward with wrap-around. |
@@ -54,7 +54,7 @@ Once locked in **`INTERACTIVE_SEARCH`** mode, **releasing `Alt` does not close t
 
 ### In-Switcher Window Management
 
-You can tidy up open windows directly from the switcher list without dismissing the overlay. Every window management shortcut transitions the session into `INTERACTIVE_SEARCH` so the list stays open for further actions:
+You can tidy up open windows directly from the switcher list without dismissing the overlay. All navigation and window management shortcuts are guarded at the Win32 low-level keyboard hook (`WH_KEYBOARD_LL`) while the switcher is active so chords like `Ctrl+W` never leak into the underlying window, and every window management shortcut transitions the session into `INTERACTIVE_SEARCH` so the list stays open for further actions:
 
 | Shortcut | Action | Behavior |
 | :--- | :--- | :--- |

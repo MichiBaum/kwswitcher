@@ -42,6 +42,7 @@ class SwitcherOverlay(
     private val stateMachine: SwitcherStateMachine,
     private val iconExtractor: IconExtractor = IconExtractor(),
     private val activeMonitorBoundsProvider: () -> Rectangle? = { null },
+    private val onRequestForegroundFocus: () -> Unit = {},
     initialConfig: SwitcherConfig = SwitcherConfig(),
     initialPalette: ThemePalette = ThemeManager.DARK_PALETTE,
 ) {
@@ -52,7 +53,7 @@ class SwitcherOverlay(
         palette = initialPalette
     }
 
-    private val searchField = JTextField().apply {
+    internal val searchField = JTextField().apply {
         font = Font("Segoe UI", Font.PLAIN, 16)
         putClientProperty(FlatClientProperties.PLACEHOLDER_TEXT, "Type to filter open windows...")
         putClientProperty(FlatClientProperties.TEXT_FIELD_SHOW_CLEAR_BUTTON, true)
@@ -130,6 +131,22 @@ class SwitcherOverlay(
     }
 
     /**
+     * Ensures Swing keyboard input focus is placed on the search field while the overlay remains visible.
+     */
+    fun ensureSearchFocus() {
+        val focusBlock = {
+            if (dialog.isVisible && !searchField.hasFocus()) {
+                searchField.requestFocusInWindow()
+            }
+        }
+        if (SwingUtilities.isEventDispatchThread()) {
+            focusBlock()
+        } else {
+            SwingUtilities.invokeLater(focusBlock)
+        }
+    }
+
+    /**
      * Renders the latest [state] snapshot on the Swing Event Dispatch Thread.
      */
     fun render(state: SwitcherUiState) {
@@ -152,6 +169,7 @@ class SwitcherOverlay(
             suppressDocumentEvents = true
             try {
                 searchField.text = state.query
+                searchField.caretPosition = state.query.length
             } finally {
                 suppressDocumentEvents = false
             }
@@ -166,13 +184,17 @@ class SwitcherOverlay(
             windowList.repaint()
         }
 
-        if (!dialog.isVisible) {
+        val openingFromHidden = !dialog.isVisible
+        if (openingFromHidden) {
             positionOnActiveMonitor(state.activeMonitorWorkArea)
             dialog.isVisible = true
             dialog.toFront()
         }
         if (!searchField.hasFocus()) {
             searchField.requestFocusInWindow()
+        }
+        if (openingFromHidden) {
+            onRequestForegroundFocus()
         }
     }
 
@@ -312,8 +334,12 @@ class SwitcherOverlay(
     }
 
     fun dispose() {
-        SwingUtilities.invokeLater {
+        if (SwingUtilities.isEventDispatchThread()) {
             dialog.dispose()
+        } else {
+            SwingUtilities.invokeLater {
+                dialog.dispose()
+            }
         }
     }
 
