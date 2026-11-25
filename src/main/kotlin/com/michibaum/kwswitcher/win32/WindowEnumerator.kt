@@ -7,6 +7,7 @@ import java.awt.Rectangle
 import java.lang.foreign.Arena
 import java.lang.foreign.MemorySegment
 import java.lang.foreign.ValueLayout
+import java.lang.invoke.MethodHandle
 import java.lang.invoke.MethodHandles
 import java.lang.invoke.MethodType
 import kotlin.io.path.Path
@@ -44,7 +45,7 @@ class WindowEnumerator internal constructor(
 
         Arena.ofConfined().use { arena ->
             val scratch = ReusableScratch(arena)
-            val callback = EnumCallback { hwndSegment, _ ->
+            val visitor = WindowVisitor { hwndSegment ->
                 val hwndAddress = hwndSegment.address()
                 val handle = WindowHandle(hwndAddress)
                 if (handle.isValid && handle !in excludedHwnds) {
@@ -68,23 +69,17 @@ class WindowEnumerator internal constructor(
                 1 // TRUE to continue enumeration
             }
 
-            val callbackHandle = MethodHandles.lookup().findVirtual(
-                EnumCallback::class.java,
-                "invoke",
-                MethodType.methodType(
-                    Int::class.javaPrimitiveType,
-                    MemorySegment::class.java,
-                    Long::class.javaPrimitiveType,
-                ),
-            ).bindTo(callback)
-
-            val upcallStub = Win32Bindings.linker.upcallStub(
-                callbackHandle,
-                Win32Bindings.ENUM_WINDOWS_PROC_DESC,
-                arena,
-            )
-
-            Win32Bindings.EnumWindows.invokeExact(upcallStub, 0L) as Int
+            val previousVisitor = UpcallBridge.activeVisitor.get()
+            UpcallBridge.activeVisitor.set(visitor)
+            try {
+                Win32Bindings.Enumeration.EnumWindows.invokeExact(UpcallBridge.sharedUpcallStub, 0L) as Int
+            } finally {
+                if (previousVisitor != null) {
+                    UpcallBridge.activeVisitor.set(previousVisitor)
+                } else {
+                    UpcallBridge.activeVisitor.remove()
+                }
+            }
         }
 
         val monitorLabels = buildMonitorLabels(monitors)
@@ -108,18 +103,18 @@ class WindowEnumerator internal constructor(
     fun getActiveMonitorWorkArea(): Rectangle? {
         Arena.ofConfined().use { arena ->
             val pointSegment = arena.allocate(Win32Bindings.POINT_LAYOUT)
-            val cursorOk = Win32Bindings.GetCursorPos.invokeExact(pointSegment) as Int
+            val cursorOk = Win32Bindings.Enumeration.GetCursorPos.invokeExact(pointSegment) as Int
             val hMonitor: MemorySegment = if (cursorOk != 0) {
                 val x = Win32Bindings.POINT_X.get(pointSegment) as Int
                 val y = Win32Bindings.POINT_Y.get(pointSegment) as Int
                 val packedPoint = packPoint(x = x, y = y)
-                Win32Bindings.MonitorFromPoint.invokeExact(
+                Win32Bindings.Enumeration.MonitorFromPoint.invokeExact(
                     packedPoint,
                     Win32Bindings.MONITOR_DEFAULTTONEAREST,
                 ) as MemorySegment
             } else {
-                val fg = Win32Bindings.GetForegroundWindow.invokeExact() as MemorySegment
-                Win32Bindings.MonitorFromWindow.invokeExact(
+                val fg = Win32Bindings.Enumeration.GetForegroundWindow.invokeExact() as MemorySegment
+                Win32Bindings.Enumeration.MonitorFromWindow.invokeExact(
                     fg,
                     Win32Bindings.MONITOR_DEFAULTTONEAREST,
                 ) as MemorySegment
@@ -131,7 +126,7 @@ class WindowEnumerator internal constructor(
 
             val monitorInfo = arena.allocate(Win32Bindings.MONITORINFO_LAYOUT)
             Win32Bindings.MONITORINFO_CB_SIZE.set(monitorInfo, Win32Bindings.MONITORINFO_LAYOUT.byteSize().toInt())
-            val ok = Win32Bindings.GetMonitorInfoW.invokeExact(hMonitor, monitorInfo) as Int
+            val ok = Win32Bindings.Enumeration.GetMonitorInfoW.invokeExact(hMonitor, monitorInfo) as Int
             if (ok == 0) {
                 return null
             }
@@ -154,17 +149,17 @@ class WindowEnumerator internal constructor(
         handle: WindowHandle,
         config: SwitcherConfig,
     ): RawWindowEntry? {
-        val visible = Win32Bindings.IsWindowVisible.invokeExact(hwnd) as Int
+        val visible = Win32Bindings.Enumeration.IsWindowVisible.invokeExact(hwnd) as Int
         if (visible == 0) {
             return null
         }
 
-        val enabled = Win32Bindings.IsWindowEnabled.invokeExact(hwnd) as Int
+        val enabled = Win32Bindings.Enumeration.IsWindowEnabled.invokeExact(hwnd) as Int
         if (enabled == 0) {
             return null
         }
 
-        val exStyle = Win32Bindings.GetWindowLongPtrW.invokeExact(hwnd, Win32Bindings.GWL_EXSTYLE) as Long
+        val exStyle = Win32Bindings.Enumeration.GetWindowLongPtrW.invokeExact(hwnd, Win32Bindings.GWL_EXSTYLE) as Long
         val isToolWindow = (exStyle and Win32Bindings.WS_EX_TOOLWINDOW) != 0L
         val isAppWindow = (exStyle and Win32Bindings.WS_EX_APPWINDOW) != 0L
         val isNoActivate = (exStyle and Win32Bindings.WS_EX_NOACTIVATE) != 0L
@@ -182,7 +177,7 @@ class WindowEnumerator internal constructor(
         }
 
         scratch.pidSegment.set(ValueLayout.JAVA_INT, 0L, 0)
-        Win32Bindings.GetWindowThreadProcessId.invokeExact(hwnd, scratch.pidSegment) as Int
+        Win32Bindings.Enumeration.GetWindowThreadProcessId.invokeExact(hwnd, scratch.pidSegment) as Int
         val pid = scratch.pidSegment.get(ValueLayout.JAVA_INT, 0L)
         if (pid.toLong() == currentProcessId && title == OVERLAY_WINDOW_TITLE) {
             return null
@@ -198,8 +193,8 @@ class WindowEnumerator internal constructor(
             return null
         }
 
-        val isMinimized = (Win32Bindings.IsIconic.invokeExact(hwnd) as Int) != 0
-        val hMonitorSegment = Win32Bindings.MonitorFromWindow.invokeExact(
+        val isMinimized = (Win32Bindings.Enumeration.IsIconic.invokeExact(hwnd) as Int) != 0
+        val hMonitorSegment = Win32Bindings.Enumeration.MonitorFromWindow.invokeExact(
             hwnd,
             Win32Bindings.MONITOR_DEFAULTTONEAREST,
         ) as MemorySegment
@@ -236,7 +231,7 @@ class WindowEnumerator internal constructor(
         if (hMonitorAddress == 0L) return false
         val monitorInfo = scratch.monitorInfoSegment
         Win32Bindings.MONITORINFO_CB_SIZE.set(monitorInfo, Win32Bindings.MONITORINFO_LAYOUT.byteSize().toInt())
-        val ok = Win32Bindings.GetMonitorInfoW.invokeExact(
+        val ok = Win32Bindings.Enumeration.GetMonitorInfoW.invokeExact(
             MemorySegment.ofAddress(hMonitorAddress),
             monitorInfo,
         ) as Int
@@ -282,7 +277,7 @@ class WindowEnumerator internal constructor(
 
     private fun isWindowCloaked(scratch: ReusableScratch, hwnd: MemorySegment): Boolean {
         scratch.cloakedSegment.set(ValueLayout.JAVA_INT, 0L, 0)
-        val hr = Win32Bindings.DwmGetWindowAttribute.invokeExact(
+        val hr = Win32Bindings.Enumeration.DwmGetWindowAttribute.invokeExact(
             hwnd,
             Win32Bindings.DWMWA_CLOAKED,
             scratch.cloakedSegment,
@@ -295,7 +290,7 @@ class WindowEnumerator internal constructor(
     }
 
     private fun readWindowTitle(arena: Arena, scratch: ReusableScratch, hwnd: MemorySegment): String {
-        val length = Win32Bindings.GetWindowTextLengthW.invokeExact(hwnd) as Int
+        val length = Win32Bindings.Enumeration.GetWindowTextLengthW.invokeExact(hwnd) as Int
         if (length <= 0) {
             return ""
         }
@@ -305,7 +300,7 @@ class WindowEnumerator internal constructor(
         } else {
             arena.allocate(ValueLayout.JAVA_CHAR, maxChars.toLong())
         }
-        val copied = Win32Bindings.GetWindowTextW.invokeExact(hwnd, buffer, maxChars) as Int
+        val copied = Win32Bindings.Enumeration.GetWindowTextW.invokeExact(hwnd, buffer, maxChars) as Int
         if (copied <= 0) {
             return ""
         }
@@ -318,8 +313,27 @@ class WindowEnumerator internal constructor(
 
     internal fun extractProcessName(exePath: String): String = Companion.extractProcessName(exePath)
 
-    private fun interface EnumCallback {
+    internal fun interface EnumCallback {
         fun invoke(hwnd: MemorySegment, lParam: Long): Int
+    }
+
+    private fun interface WindowVisitor {
+        fun visit(hwnd: MemorySegment): Int
+    }
+
+    private object UpcallBridge {
+        val activeVisitor = ThreadLocal<WindowVisitor?>()
+
+        private val dispatchCallback = EnumCallback { hwnd, _ ->
+            activeVisitor.get()?.visit(hwnd) ?: 1
+        }
+
+        @JvmField
+        val sharedUpcallStub: MemorySegment = Win32Bindings.linker.upcallStub(
+            ENUM_CALLBACK_HANDLE.bindTo(dispatchCallback),
+            Win32Bindings.ENUM_WINDOWS_PROC_DESC,
+            Arena.global(),
+        )
     }
 
     companion object {
@@ -329,12 +343,25 @@ class WindowEnumerator internal constructor(
         private val DEFAULT_CONFIG = SwitcherConfig()
         private val UNKNOWN_PROCESS_METADATA = ProcessMetadata(exePath = "", processName = "Unknown")
 
+        internal val ENUM_CALLBACK_HANDLE: MethodHandle = MethodHandles.lookup().findVirtual(
+            EnumCallback::class.java,
+            "invoke",
+            MethodType.methodType(
+                Int::class.javaPrimitiveType,
+                MemorySegment::class.java,
+                Long::class.javaPrimitiveType,
+            ),
+        )
+
+        internal val sharedUpcallStubAddress: Long
+            get() = UpcallBridge.sharedUpcallStub.address()
+
         internal fun packPoint(x: Int, y: Int): Long =
             (x.toLong() and 0xFFFF_FFFFL) or (y.toLong() shl 32)
 
         internal fun queryProcessImagePath(pid: Int, scratch: ReusableScratch): String {
             if (pid <= 0) return ""
-            val processHandle = Win32Bindings.OpenProcess.invokeExact(
+            val processHandle = Win32Bindings.Enumeration.OpenProcess.invokeExact(
                 Win32Bindings.PROCESS_QUERY_LIMITED_INFORMATION,
                 0,
                 pid,
@@ -344,7 +371,7 @@ class WindowEnumerator internal constructor(
             }
             try {
                 scratch.pathSizeSegment.set(ValueLayout.JAVA_INT, 0L, PATH_BUFFER_CAPACITY)
-                val ok = Win32Bindings.QueryFullProcessImageNameW.invokeExact(
+                val ok = Win32Bindings.Enumeration.QueryFullProcessImageNameW.invokeExact(
                     processHandle,
                     0,
                     scratch.pathBuffer,
@@ -363,7 +390,7 @@ class WindowEnumerator internal constructor(
                 }
                 return String(chars)
             } finally {
-                Win32Bindings.CloseHandle.invokeExact(processHandle) as Int
+                Win32Bindings.Mutex.CloseHandle.invokeExact(processHandle) as Int
             }
         }
 

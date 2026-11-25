@@ -29,7 +29,7 @@ class SingleInstanceMutex(
             }
             nameSegment.setAtIndex(ValueLayout.JAVA_CHAR, chars.size.toLong(), 0.toChar())
 
-            val handle = Win32Bindings.CreateMutexW.invokeExact(
+            val handle = Win32Bindings.Mutex.CreateMutexW.invokeExact(
                 MemorySegment.NULL,
                 1,
                 nameSegment,
@@ -39,9 +39,9 @@ class SingleInstanceMutex(
                 return false
             }
 
-            val lastError = Win32Bindings.GetLastError.invokeExact() as Int
+            val lastError = Win32Bindings.Mutex.GetLastError.invokeExact() as Int
             if (lastError == Win32Bindings.ERROR_ALREADY_EXISTS) {
-                Win32Bindings.CloseHandle.invokeExact(handle) as Int
+                Win32Bindings.Mutex.CloseHandle.invokeExact(handle) as Int
                 return false
             }
 
@@ -54,8 +54,8 @@ class SingleInstanceMutex(
         val handle = mutexHandle
         if (handle != MemorySegment.NULL) {
             mutexHandle = MemorySegment.NULL
-            Win32Bindings.ReleaseMutex.invokeExact(handle) as Int
-            Win32Bindings.CloseHandle.invokeExact(handle) as Int
+            Win32Bindings.Mutex.ReleaseMutex.invokeExact(handle) as Int
+            Win32Bindings.Mutex.CloseHandle.invokeExact(handle) as Int
         }
     }
 

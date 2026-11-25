@@ -1,6 +1,7 @@
 package com.michibaum.kwswitcher.ui
 
 import com.michibaum.kwswitcher.config.ThemeOption
+import com.michibaum.kwswitcher.win32.StartupRegistry
 import java.awt.BasicStroke
 import java.awt.CheckboxMenuItem
 import java.awt.Color
@@ -21,6 +22,7 @@ class SystemTrayController(
     private val onReloadConfig: () -> Unit,
     private val onSelectTheme: (ThemeOption) -> Unit,
     private val onQuit: () -> Unit,
+    private val startupRegistry: StartupRegistry = StartupRegistry(),
 ) : AutoCloseable {
 
     private var trayIcon: TrayIcon? = null
@@ -57,10 +59,10 @@ class SystemTrayController(
                 themeMenu.add(item)
             }
 
-            val startupItem = CheckboxMenuItem("Run at Windows Startup", isStartupRegistered()).apply {
+            val startupItem = CheckboxMenuItem("Run at Windows Startup", startupRegistry.isRegistered()).apply {
                 addItemListener {
                     val enabled = state
-                    if (!setStartupRegistered(enabled)) {
+                    if (!startupRegistry.setRegistered(enabled)) {
                         state = !enabled
                     }
                 }
@@ -98,46 +100,6 @@ class SystemTrayController(
         }
     }
 
-    private fun isStartupRegistered(): Boolean = runCatching {
-        val process = ProcessBuilder(
-            "reg",
-            "query",
-            RUN_REGISTRY_KEY,
-            "/v",
-            APP_REGISTRY_VALUE_NAME,
-        ).redirectErrorStream(true).start()
-        process.waitFor() == 0
-    }.getOrDefault(false)
-
-    private fun setStartupRegistered(enabled: Boolean): Boolean = runCatching {
-        val command = if (enabled) {
-            val launchCommand = ProcessHandle.current().info().command().orElse("kwswitcher.exe")
-            listOf(
-                "reg",
-                "add",
-                RUN_REGISTRY_KEY,
-                "/v",
-                APP_REGISTRY_VALUE_NAME,
-                "/t",
-                "REG_SZ",
-                "/d",
-                "\"$launchCommand\"",
-                "/f",
-            )
-        } else {
-            listOf(
-                "reg",
-                "delete",
-                RUN_REGISTRY_KEY,
-                "/v",
-                APP_REGISTRY_VALUE_NAME,
-                "/f",
-            )
-        }
-        val process = ProcessBuilder(command).redirectErrorStream(true).start()
-        process.waitFor() == 0
-    }.getOrDefault(false)
-
     private fun createTrayImage(): BufferedImage {
         val size = 16
         val image = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
@@ -158,10 +120,5 @@ class SystemTrayController(
             g2.dispose()
         }
         return image
-    }
-
-    companion object {
-        private const val RUN_REGISTRY_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
-        private const val APP_REGISTRY_VALUE_NAME = "kwswitcher"
     }
 }

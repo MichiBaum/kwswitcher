@@ -20,13 +20,13 @@ class WindowActivator {
         }
         val targetHwnd = MemorySegment.ofAddress(handle.value)
 
-        val iconic = Win32Bindings.IsIconic.invokeExact(targetHwnd) as Int
+        val iconic = Win32Bindings.Enumeration.IsIconic.invokeExact(targetHwnd) as Int
         if (iconic != 0) {
-            Win32Bindings.ShowWindow.invokeExact(targetHwnd, Win32Bindings.SW_RESTORE) as Int
+            Win32Bindings.Activator.ShowWindow.invokeExact(targetHwnd, Win32Bindings.SW_RESTORE) as Int
         }
 
-        val currentThreadId = Win32Bindings.GetCurrentThreadId.invokeExact() as Int
-        val foregroundHwnd = Win32Bindings.GetForegroundWindow.invokeExact() as MemorySegment
+        val currentThreadId = Win32Bindings.Hook.GetCurrentThreadId.invokeExact() as Int
+        val foregroundHwnd = Win32Bindings.Enumeration.GetForegroundWindow.invokeExact() as MemorySegment
 
         var foregroundThreadId = 0
         var attached = false
@@ -34,14 +34,14 @@ class WindowActivator {
         Arena.ofConfined().use { arena ->
             if (foregroundHwnd != MemorySegment.NULL) {
                 val dummyPid = arena.allocate(ValueLayout.JAVA_INT)
-                foregroundThreadId = Win32Bindings.GetWindowThreadProcessId.invokeExact(
+                foregroundThreadId = Win32Bindings.Enumeration.GetWindowThreadProcessId.invokeExact(
                     foregroundHwnd,
                     dummyPid,
                 ) as Int
             }
 
             if (foregroundThreadId != 0 && foregroundThreadId != currentThreadId) {
-                val attachResult = Win32Bindings.AttachThreadInput.invokeExact(
+                val attachResult = Win32Bindings.Activator.AttachThreadInput.invokeExact(
                     currentThreadId,
                     foregroundThreadId,
                     1,
@@ -51,12 +51,12 @@ class WindowActivator {
 
             try {
                 sendZeroEffectAltKeyTap(arena)
-                Win32Bindings.BringWindowToTop.invokeExact(targetHwnd) as Int
-                val focused = Win32Bindings.SetForegroundWindow.invokeExact(targetHwnd) as Int
+                Win32Bindings.Activator.BringWindowToTop.invokeExact(targetHwnd) as Int
+                val focused = Win32Bindings.Activator.SetForegroundWindow.invokeExact(targetHwnd) as Int
                 return focused != 0
             } finally {
                 if (attached) {
-                    Win32Bindings.AttachThreadInput.invokeExact(
+                    Win32Bindings.Activator.AttachThreadInput.invokeExact(
                         currentThreadId,
                         foregroundThreadId,
                         0,
@@ -72,7 +72,7 @@ class WindowActivator {
     fun closeGracefully(handle: WindowHandle): Boolean {
         if (!handle.isValid) return false
         val targetHwnd = MemorySegment.ofAddress(handle.value)
-        val posted = Win32Bindings.PostMessageW.invokeExact(
+        val posted = Win32Bindings.Activator.PostMessageW.invokeExact(
             targetHwnd,
             Win32Bindings.WM_CLOSE,
             0L,
@@ -87,7 +87,7 @@ class WindowActivator {
     fun minimize(handle: WindowHandle): Boolean {
         if (!handle.isValid) return false
         val targetHwnd = MemorySegment.ofAddress(handle.value)
-        Win32Bindings.ShowWindow.invokeExact(targetHwnd, Win32Bindings.SW_MINIMIZE) as Int
+        Win32Bindings.Activator.ShowWindow.invokeExact(targetHwnd, Win32Bindings.SW_MINIMIZE) as Int
         return true
     }
 
@@ -96,7 +96,7 @@ class WindowActivator {
      */
     fun terminateProcess(pid: Int): Boolean {
         if (pid <= 0) return false
-        val processHandle = Win32Bindings.OpenProcess.invokeExact(
+        val processHandle = Win32Bindings.Enumeration.OpenProcess.invokeExact(
             Win32Bindings.PROCESS_TERMINATE,
             0,
             pid,
@@ -105,10 +105,10 @@ class WindowActivator {
             return false
         }
         try {
-            val result = Win32Bindings.TerminateProcess.invokeExact(processHandle, 1) as Int
+            val result = Win32Bindings.Activator.TerminateProcess.invokeExact(processHandle, 1) as Int
             return result != 0
         } finally {
-            Win32Bindings.CloseHandle.invokeExact(processHandle) as Int
+            Win32Bindings.Mutex.CloseHandle.invokeExact(processHandle) as Int
         }
     }
 
@@ -125,6 +125,6 @@ class WindowActivator {
         Win32Bindings.INPUT_ARR_W_VK.set(inputs, 1L, Win32Bindings.VK_MENU.toShort())
         Win32Bindings.INPUT_ARR_DW_FLAGS.set(inputs, 1L, Win32Bindings.KEYEVENTF_KEYUP)
 
-        Win32Bindings.SendInput.invokeExact(2, inputs, Win32Bindings.INPUT_LAYOUT.byteSize().toInt()) as Int
+        Win32Bindings.Activator.SendInput.invokeExact(2, inputs, Win32Bindings.INPUT_LAYOUT.byteSize().toInt()) as Int
     }
 }

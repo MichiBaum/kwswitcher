@@ -15,11 +15,14 @@ import com.michibaum.kwswitcher.win32.WindowActivator
 import com.michibaum.kwswitcher.win32.WindowEnumerator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.swing.Swing
+import kotlinx.coroutines.withContext
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import javax.swing.SwingUtilities
 
@@ -28,6 +31,7 @@ import javax.swing.SwingUtilities
  * Enforces a single instance, loads `%APPDATA%\kwswitcher\config.json`, initializes the FlatLaf theme,
  * installs the `WH_KEYBOARD_LL` hotkey hook, and wires the system tray and overlay UI.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 fun main() {
     val instanceMutex = SingleInstanceMutex()
     if (!instanceMutex.tryAcquire()) {
@@ -37,9 +41,13 @@ fun main() {
 
     val configRepository = ConfigRepository()
     val configRef = AtomicReference(configRepository.loadOrCreate())
-    val initialPalette = ThemeManager.applyTheme(configRef.get().theme)
+    val initialPalette = ThemeManager.applyTheme(
+        option = configRef.get().theme,
+        updateExistingComponents = false,
+    )
 
-    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val win32Dispatcher = Dispatchers.IO.limitedParallelism(1)
     val iconExtractor = IconExtractor(parentScope = appScope)
     val windowEnumerator = WindowEnumerator(
         configProvider = { configRef.get() },
@@ -47,10 +55,27 @@ fun main() {
     val windowActivator = WindowActivator()
     val stateMachine = SwitcherStateMachine(
         enumerateWindows = { windowEnumerator.enumerateOpenWindows() },
-        onActivateWindow = { target -> windowActivator.activate(target.hwnd) },
-        onCloseWindow = { target -> windowActivator.closeGracefully(target.hwnd) },
-        onMinimizeWindow = { target -> windowActivator.minimize(target.hwnd) },
-        onTerminateProcess = { target -> windowActivator.terminateProcess(target.pid) },
+        queryActiveMonitorWorkArea = { windowEnumerator.getActiveMonitorWorkArea() },
+        onActivateWindow = { target ->
+            appScope.launch(win32Dispatcher) {
+                windowActivator.activate(target.hwnd)
+            }
+        },
+        onCloseWindow = { target ->
+            appScope.launch(win32Dispatcher) {
+                windowActivator.closeGracefully(target.hwnd)
+            }
+        },
+        onMinimizeWindow = { target ->
+            appScope.launch(win32Dispatcher) {
+                windowActivator.minimize(target.hwnd)
+            }
+        },
+        onTerminateProcess = { target ->
+            appScope.launch(win32Dispatcher) {
+                windowActivator.terminateProcess(target.pid)
+            }
+        },
     )
 
     var overlay: SwitcherOverlay? = null
@@ -81,20 +106,25 @@ fun main() {
 
     val trayController = SystemTrayController(
         onShowSwitcher = {
-            stateMachine.onShowInteractive()
+            appScope.launch(win32Dispatcher) {
+                stateMachine.onShowInteractive()
+            }
         },
         onReloadConfig = {
-            val reloaded = configRepository.loadOrCreate()
-            configRef.set(reloaded)
-            SwingUtilities.invokeLater {
-                val palette = ThemeManager.applyTheme(reloaded.theme)
-                overlay?.updateConfigAndTheme(reloaded, palette)
+            appScope.launch(Dispatchers.IO) {
+                val reloaded = configRepository.loadOrCreate()
+                configRef.set(reloaded)
+                withContext(Dispatchers.Swing) {
+                    val palette = ThemeManager.applyTheme(reloaded.theme)
+                    overlay?.updateConfigAndTheme(reloaded, palette)
+                }
             }
         },
         onSelectTheme = { theme: ThemeOption ->
-            val updated = configRef.get().copy(theme = theme)
-            configRef.set(updated)
-            runCatching { configRepository.save(updated) }
+            val updated = configRef.updateAndGet { it.copy(theme = theme) }
+            appScope.launch(Dispatchers.IO) {
+                runCatching { configRepository.save(updated) }
+            }
             SwingUtilities.invokeLater {
                 val palette = ThemeManager.applyTheme(theme)
                 overlay?.updateConfigAndTheme(updated, palette)
@@ -112,7 +142,7 @@ fun main() {
         }
     }
 
-    appScope.launch {
+    appScope.launch(win32Dispatcher) {
         keyboardHook.events.collect { event ->
             when (event) {
                 is HookKeyEvent.AltTabPressed -> stateMachine.onAltTabPressed(reverse = event.reverse)
@@ -121,13 +151,16 @@ fun main() {
         }
     }
 
+    val cleanedUp = AtomicBoolean(false)
     val cleanup = {
-        trayController.close()
-        keyboardHook.close()
-        overlay?.dispose()
-        iconExtractor.close()
-        appScope.cancel()
-        instanceMutex.close()
+        if (cleanedUp.compareAndSet(false, true)) {
+            trayController.close()
+            keyboardHook.close()
+            overlay?.dispose()
+            iconExtractor.close()
+            appScope.cancel()
+            instanceMutex.close()
+        }
     }
 
     Runtime.getRuntime().addShutdownHook(

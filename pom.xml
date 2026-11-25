@@ -110,8 +110,10 @@
                     <executable>java</executable>
                     <arguments>
                         <argument>--enable-native-access=ALL-UNNAMED</argument>
-                        <argument>-Xmx128m</argument>
-                        <argument>-XX:+UseG1GC</argument>
+                        <argument>-Xms16m</argument>
+                        <argument>-Xmx64m</argument>
+                        <argument>-XX:+UseCompactObjectHeaders</argument>
+                        <argument>-XX:+UseSerialGC</argument>
                         <argument>-classpath</argument>
                         <classpath/>
                         <argument>${main.class}</argument>
@@ -243,9 +245,13 @@
                                             <arg value="--java-options"/>
                                             <arg value="--enable-native-access=ALL-UNNAMED"/>
                                             <arg value="--java-options"/>
-                                            <arg value="-Xmx128m"/>
+                                            <arg value="-Xms16m"/>
                                             <arg value="--java-options"/>
-                                            <arg value="-XX:+UseG1GC"/>
+                                            <arg value="-Xmx64m"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="-XX:+UseCompactObjectHeaders"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="-XX:+UseSerialGC"/>
                                         </exec>
                                     </target>
                                 </configuration>
@@ -315,9 +321,13 @@
                                             <arg value="--java-options"/>
                                             <arg value="--enable-native-access=ALL-UNNAMED"/>
                                             <arg value="--java-options"/>
-                                            <arg value="-Xmx128m"/>
+                                            <arg value="-Xms16m"/>
                                             <arg value="--java-options"/>
-                                            <arg value="-XX:+UseG1GC"/>
+                                            <arg value="-Xmx64m"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="-XX:+UseCompactObjectHeaders"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="-XX:+UseSerialGC"/>
                                             <arg value="--win-dir-chooser"/>
                                             <arg value="--win-menu"/>
                                             <arg value="--win-shortcut"/>

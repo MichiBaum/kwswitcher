@@ -37,7 +37,7 @@ Builds a self-contained jar (requires JDK 25+ to run):
 ```powershell
 .\mvnw.cmd package
 # run with:
-java -jar target\kwswitcher-*-jar-with-dependencies.jar
+java --enable-native-access=ALL-UNNAMED -Xms16m -Xmx64m -XX:+UseCompactObjectHeaders -XX:+UseSerialGC -jar target\kwswitcher-*-jar-with-dependencies.jar
 ```
 
 ## Release
