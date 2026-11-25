@@ -89,7 +89,9 @@ class WindowListCellRenderer(
         val currentPalette = palette
         val highlightColor = if (isSelected) currentPalette.highlightSelectedHex else currentPalette.highlightHex
 
-        titleLabel.icon = iconExtractor.getIcon(window)
+        titleLabel.icon = iconExtractor.getIconOrDefault(window) {
+            list.repaint()
+        }
         titleLabel.configureText(
             rawText = window.title,
             ranges = value.titleHighlights,

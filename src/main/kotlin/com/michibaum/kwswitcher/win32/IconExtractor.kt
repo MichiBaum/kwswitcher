@@ -2,9 +2,16 @@ package com.michibaum.kwswitcher.win32
 
 import com.michibaum.kwswitcher.domain.WindowHandle
 import com.michibaum.kwswitcher.domain.WindowInfo
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableJob
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import java.awt.BasicStroke
 import java.awt.Color
-import java.awt.Image
 import java.awt.RenderingHints
 import java.awt.image.BufferedImage
 import java.io.File
@@ -13,51 +20,180 @@ import java.lang.foreign.MemorySegment
 import java.lang.foreign.ValueLayout
 import javax.swing.Icon
 import javax.swing.ImageIcon
+import javax.swing.SwingUtilities
 import javax.swing.filechooser.FileSystemView
 
 /**
  * Extracts and caches native Win32 application icons (`HICON` -> `BufferedImage` -> [ImageIcon])
  * using `SendMessageTimeoutW(WM_GETICON, SMTO_ABORTIFHUNG, 50ms)`, `GetClassLongPtrW`, and `gdi32.dll` (`FR-4`).
  */
-class IconExtractor(
-    private val maxCacheEntries: Int = 128,
-    private val targetSize: Int = 20,
-) {
+class IconExtractor internal constructor(
+    private val maxCacheEntries: Int,
+    private val targetSize: Int,
+    parentScope: CoroutineScope?,
+    ioDispatcher: CoroutineDispatcher,
+    private val uiExecutor: (Runnable) -> Unit,
+    private val customExtractor: ((WindowInfo) -> Icon?)?,
+) : AutoCloseable {
+
+    constructor(
+        maxCacheEntries: Int = 128,
+        targetSize: Int = 20,
+        parentScope: CoroutineScope? = null,
+        ioDispatcher: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(4),
+        uiExecutor: (Runnable) -> Unit = SwingUtilities::invokeLater,
+    ) : this(
+        maxCacheEntries = maxCacheEntries,
+        targetSize = targetSize,
+        parentScope = parentScope,
+        ioDispatcher = ioDispatcher,
+        uiExecutor = uiExecutor,
+        customExtractor = null,
+    )
+
+    private val scopeJob: CompletableJob = SupervisorJob(parentScope?.coroutineContext?.get(Job))
+    private val extractorScope: CoroutineScope = CoroutineScope(scopeJob + ioDispatcher)
+
     private val cacheLock = Any()
+    private var cacheGeneration: Long = 0L
+    private var closed: Boolean = false
+    private val inFlightRequests = HashMap<String, InFlightRequest>()
+
     private val iconCache = object : LinkedHashMap<String, Icon>(maxCacheEntries, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Icon>?): Boolean =
             size > maxCacheEntries
     }
 
-    private val defaultIcon: Icon by lazy { createDefaultAppIcon(targetSize) }
+    internal val defaultIcon: Icon by lazy { createDefaultAppIcon(targetSize) }
 
     /**
-     * Resolves an [Icon] for [window], returning a cached instance when `exePath` has already been resolved.
+     * Synchronously resolves an [Icon] for [window], returning a cached instance when available.
      */
     fun getIcon(window: WindowInfo): Icon {
-        val cacheKey = window.exePath.lowercase().ifBlank { "hwnd:${window.hwnd.value}" }
+        val cacheKey = cacheKeyFor(window)
+        val startGeneration: Long
         synchronized(cacheLock) {
             iconCache[cacheKey]?.let { return it }
+            startGeneration = cacheGeneration
         }
 
-        val resolved = extractFromHwnd(window.hwnd)
-            ?: extractFromFileSystem(window.exePath)
-            ?: defaultIcon
+        val resolved = resolveWindowIcon(window)
 
         synchronized(cacheLock) {
-            iconCache[cacheKey] = resolved
+            if (!closed && cacheGeneration == startGeneration) {
+                iconCache[cacheKey] = resolved
+            }
         }
         return resolved
     }
 
     /**
-     * Clears all cached icons.
+     * Non-blocking EDT-safe icon lookup: returns the cached [Icon] immediately on a cache hit,
+     * or returns [defaultIcon] and schedules deduplicated background extraction that invokes
+     * [onResolved] via [uiExecutor] once cached.
+     */
+    fun getIconOrDefault(window: WindowInfo, onResolved: (() -> Unit)? = null): Icon {
+        val cacheKey = cacheKeyFor(window)
+        val request: InFlightRequest
+        synchronized(cacheLock) {
+            iconCache[cacheKey]?.let { return it }
+            if (closed || !scopeJob.isActive) {
+                return defaultIcon
+            }
+            val existing = inFlightRequests[cacheKey]
+            if (existing != null) {
+                if (onResolved != null) {
+                    existing.callbacks.add(onResolved)
+                }
+                return defaultIcon
+            }
+            val callbacks = mutableListOf<() -> Unit>()
+            if (onResolved != null) {
+                callbacks.add(onResolved)
+            }
+            request = InFlightRequest(generation = cacheGeneration, callbacks = callbacks)
+            inFlightRequests[cacheKey] = request
+        }
+
+        extractorScope.launch {
+            var resolved: Icon? = null
+            try {
+                resolved = resolveWindowIcon(window)
+            } finally {
+                val callbacksToInvoke: List<() -> Unit> = synchronized(cacheLock) {
+                    if (inFlightRequests[cacheKey] === request) {
+                        inFlightRequests.remove(cacheKey)
+                    }
+                    if (resolved != null && !closed && cacheGeneration == request.generation) {
+                        iconCache[cacheKey] = resolved
+                        request.callbacks.toList()
+                    } else {
+                        emptyList()
+                    }
+                }
+                if (callbacksToInvoke.isNotEmpty()) {
+                    uiExecutor(
+                        Runnable {
+                            for (callback in callbacksToInvoke) {
+                                callback()
+                            }
+                        },
+                    )
+                }
+            }
+        }
+
+        return defaultIcon
+    }
+
+    /**
+     * Clears all cached icons and invalidates any in-flight background completions from earlier generations.
      */
     fun clearCache() {
         synchronized(cacheLock) {
+            cacheGeneration++
             iconCache.clear()
+            inFlightRequests.clear()
         }
     }
+
+    override fun close() {
+        synchronized(cacheLock) {
+            if (closed) {
+                return
+            }
+            closed = true
+            inFlightRequests.clear()
+        }
+        scopeJob.cancel()
+    }
+
+    internal fun peekCachedIcon(window: WindowInfo): Icon? = synchronized(cacheLock) {
+        iconCache[cacheKeyFor(window)]
+    }
+
+    private fun cacheKeyFor(window: WindowInfo): String =
+        window.exePath.lowercase().ifBlank { "hwnd:${window.hwnd.value}" }
+
+    private fun resolveWindowIcon(window: WindowInfo): Icon {
+        val extracted = try {
+            if (customExtractor != null) {
+                customExtractor.invoke(window)
+            } else {
+                extractFromHwnd(window.hwnd) ?: extractFromFileSystem(window.exePath)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        return extracted ?: defaultIcon
+    }
+
+    private class InFlightRequest(
+        val generation: Long,
+        val callbacks: MutableList<() -> Unit>,
+    )
 
     internal fun extractFromHwnd(handle: WindowHandle): Icon? {
         if (!handle.isValid) return null
@@ -115,15 +251,17 @@ class IconExtractor(
             return null
         }
 
-        val hbmMask = iconInfo.get(ValueLayout.ADDRESS, 16L)
-        val hbmColor = iconInfo.get(ValueLayout.ADDRESS, 24L)
-        val bitmapToRead = if (hbmColor != MemorySegment.NULL) hbmColor else hbmMask
-        if (bitmapToRead == MemorySegment.NULL) {
-            return null
-        }
-
+        var hbmMask = MemorySegment.NULL
+        var hbmColor = MemorySegment.NULL
         var hdc = MemorySegment.NULL
         try {
+            hbmMask = Win32Bindings.ICONINFO_HBM_MASK.get(iconInfo) as MemorySegment
+            hbmColor = Win32Bindings.ICONINFO_HBM_COLOR.get(iconInfo) as MemorySegment
+            val bitmapToRead = if (hbmColor != MemorySegment.NULL) hbmColor else hbmMask
+            if (bitmapToRead == MemorySegment.NULL) {
+                return null
+            }
+
             val bitmapStruct = arena.allocate(Win32Bindings.BITMAP_LAYOUT)
             val gotObj = Win32Bindings.GetObjectW.invokeExact(
                 bitmapToRead,
@@ -134,8 +272,8 @@ class IconExtractor(
                 return null
             }
 
-            val width = bitmapStruct.get(ValueLayout.JAVA_INT, 4L)
-            val height = bitmapStruct.get(ValueLayout.JAVA_INT, 8L)
+            val width = Win32Bindings.BITMAP_BM_WIDTH.get(bitmapStruct) as Int
+            val height = Win32Bindings.BITMAP_BM_HEIGHT.get(bitmapStruct) as Int
             if (width <= 0 || height <= 0 || width > 256 || height > 256) {
                 return null
             }
@@ -146,12 +284,12 @@ class IconExtractor(
             }
 
             val bmi = arena.allocate(Win32Bindings.BITMAPINFOHEADER_LAYOUT)
-            bmi.set(ValueLayout.JAVA_INT, 0L, Win32Bindings.BITMAPINFOHEADER_LAYOUT.byteSize().toInt())
-            bmi.set(ValueLayout.JAVA_INT, 4L, width)
-            bmi.set(ValueLayout.JAVA_INT, 8L, -height) // Top-down DIB
-            bmi.set(ValueLayout.JAVA_SHORT, 12L, 1.toShort())
-            bmi.set(ValueLayout.JAVA_SHORT, 14L, 32.toShort())
-            bmi.set(ValueLayout.JAVA_INT, 16L, Win32Bindings.BI_RGB)
+            Win32Bindings.BMIH_BI_SIZE.set(bmi, Win32Bindings.BITMAPINFOHEADER_LAYOUT.byteSize().toInt())
+            Win32Bindings.BMIH_BI_WIDTH.set(bmi, width)
+            Win32Bindings.BMIH_BI_HEIGHT.set(bmi, -height) // Top-down DIB
+            Win32Bindings.BMIH_BI_PLANES.set(bmi, 1.toShort())
+            Win32Bindings.BMIH_BI_BIT_COUNT.set(bmi, 32.toShort())
+            Win32Bindings.BMIH_BI_COMPRESSION.set(bmi, Win32Bindings.BI_RGB)
 
             val pixelCount = width * height
             val pixelsSegment = arena.allocate(ValueLayout.JAVA_INT, pixelCount.toLong())
@@ -207,7 +345,7 @@ class IconExtractor(
 
     private fun extractFromFileSystem(exePath: String): Icon? {
         if (exePath.isBlank()) return null
-        return runCatching {
+        return try {
             val file = File(exePath)
             if (!file.exists()) return null
             val sysIcon = FileSystemView.getFileSystemView().getSystemIcon(file) ?: return null
@@ -223,17 +361,52 @@ class IconExtractor(
                 g.dispose()
             }
             ImageIcon(scaleImage(buffered, targetSize))
-        }.getOrNull()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
     }
 
-    private fun scaleImage(source: BufferedImage, size: Int): BufferedImage {
-        val scaled = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
+    internal fun scaleImage(source: BufferedImage, size: Int): BufferedImage {
+        val target = size.coerceAtLeast(1)
+        var current = source
+        var currentWidth = source.width.coerceAtLeast(1)
+        var currentHeight = source.height.coerceAtLeast(1)
+
+        if (currentWidth == target && currentHeight == target && current.type == BufferedImage.TYPE_INT_ARGB) {
+            return current
+        }
+
+        while (currentWidth > target * 2 || currentHeight > target * 2) {
+            val nextWidth = if (currentWidth > target * 2) (currentWidth / 2).coerceAtLeast(target) else currentWidth
+            val nextHeight = if (currentHeight > target * 2) (currentHeight / 2).coerceAtLeast(target) else currentHeight
+            val stepImage = BufferedImage(nextWidth, nextHeight, BufferedImage.TYPE_INT_ARGB)
+            val g2 = stepImage.createGraphics()
+            try {
+                g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+                g2.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                g2.drawImage(current, 0, 0, nextWidth, nextHeight, null)
+            } finally {
+                g2.dispose()
+            }
+            current = stepImage
+            currentWidth = nextWidth
+            currentHeight = nextHeight
+        }
+
+        if (currentWidth == target && currentHeight == target && current.type == BufferedImage.TYPE_INT_ARGB) {
+            return current
+        }
+
+        val scaled = BufferedImage(target, target, BufferedImage.TYPE_INT_ARGB)
         val g2 = scaled.createGraphics()
         try {
-            g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+            g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC)
             g2.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY)
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-            g2.drawImage(source.getScaledInstance(size, size, Image.SCALE_SMOOTH), 0, 0, null)
+            g2.drawImage(current, 0, 0, target, target, null)
         } finally {
             g2.dispose()
         }

@@ -19,55 +19,96 @@ data class HotkeyConfig(
     val triggerKey: String = "TAB",
     val reverseModifier: String = "SHIFT",
 ) {
-    /**
-     * Returns the Win32 virtual-key codes corresponding to the configured primary [modifier].
-     */
-    fun modifierVkCodes(): Set<Int> = when (modifier.uppercase()) {
-        "CTRL", "CONTROL" -> setOf(Win32Bindings.VK_CONTROL, Win32Bindings.VK_LCONTROL, Win32Bindings.VK_RCONTROL)
-        "WIN", "WINDOWS" -> setOf(Win32Bindings.VK_LWIN, Win32Bindings.VK_RWIN)
-        else -> setOf(Win32Bindings.VK_MENU, Win32Bindings.VK_LMENU, Win32Bindings.VK_RMENU)
-    }
+    private val modifierVks: IntArray = resolveModifierVks(modifier)
+    private val reverseModifierVks: IntArray = resolveReverseModifierVks(reverseModifier)
 
     /**
-     * Returns the primary Win32 virtual-key code for querying [Win32Bindings.GetAsyncKeyState] of [reverseModifier].
+     * Pre-computed Win32 virtual-key codes corresponding to the configured primary [modifier].
      */
-    fun reverseModifierPrimaryVk(): Int = when (reverseModifier.uppercase()) {
-        "CTRL", "CONTROL" -> Win32Bindings.VK_CONTROL
-        "ALT" -> Win32Bindings.VK_MENU
-        else -> Win32Bindings.VK_SHIFT
-    }
+    val modifierVkCodes: Set<Int> = modifierVks.toSet()
 
     /**
-     * Returns all Win32 virtual-key codes that match the configured [reverseModifier].
+     * Pre-computed Win32 virtual-key codes that match the configured [reverseModifier].
      */
-    fun reverseModifierVkCodes(): Set<Int> = when (reverseModifier.uppercase()) {
-        "CTRL", "CONTROL" -> setOf(Win32Bindings.VK_CONTROL, Win32Bindings.VK_LCONTROL, Win32Bindings.VK_RCONTROL)
-        "ALT" -> setOf(Win32Bindings.VK_MENU, Win32Bindings.VK_LMENU, Win32Bindings.VK_RMENU)
-        else -> setOf(Win32Bindings.VK_SHIFT, Win32Bindings.VK_LSHIFT, Win32Bindings.VK_RSHIFT)
-    }
+    val reverseModifierVkCodes: Set<Int> = reverseModifierVks.toSet()
 
     /**
-     * Returns the Win32 virtual-key code for the [triggerKey].
+     * Pre-computed primary Win32 virtual-key code for querying [Win32Bindings.GetAsyncKeyState] of [reverseModifier].
      */
-    fun triggerVkCode(): Int {
-        val normalized = triggerKey.trim().uppercase()
-        return when (normalized) {
-            "TAB" -> Win32Bindings.VK_TAB
-            "SPACE" -> Win32Bindings.VK_SPACE
-            "BACKTICK", "GRAVE", "`" -> Win32Bindings.VK_OEM_3
-            else -> if (normalized.length == 1 && normalized[0] in 'A'..'Z') {
-                normalized[0].code
-            } else {
-                Win32Bindings.VK_TAB
-            }
-        }
-    }
+    val reverseModifierPrimaryVk: Int = resolveReverseModifierPrimaryVk(reverseModifier)
+
+    /**
+     * Pre-computed Win32 virtual-key code for the [triggerKey].
+     */
+    val triggerVkCode: Int = resolveTriggerVk(triggerKey)
 
     /**
      * Whether the primary modifier is the `Alt` key (`VK_MENU`).
      */
-    val isAltModifier: Boolean
-        get() = modifier.uppercase() !in setOf("CTRL", "CONTROL", "WIN", "WINDOWS")
+    val isAltModifier: Boolean = resolveIsAltModifier(modifier)
+
+    /**
+     * Zero-allocation primitive check whether [vkCode] matches the configured [modifier].
+     */
+    fun matchesModifierVk(vkCode: Int): Boolean {
+        for (code in modifierVks) {
+            if (code == vkCode) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * Zero-allocation primitive check whether [vkCode] matches the configured [reverseModifier].
+     */
+    fun matchesReverseModifierVk(vkCode: Int): Boolean {
+        for (code in reverseModifierVks) {
+            if (code == vkCode) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private companion object {
+        fun resolveModifierVks(modifier: String): IntArray = when (modifier.trim().uppercase()) {
+            "CTRL", "CONTROL" -> intArrayOf(Win32Bindings.VK_CONTROL, Win32Bindings.VK_LCONTROL, Win32Bindings.VK_RCONTROL)
+            "WIN", "WINDOWS" -> intArrayOf(Win32Bindings.VK_LWIN, Win32Bindings.VK_RWIN)
+            else -> intArrayOf(Win32Bindings.VK_MENU, Win32Bindings.VK_LMENU, Win32Bindings.VK_RMENU)
+        }
+
+        fun resolveReverseModifierPrimaryVk(reverseModifier: String): Int = when (reverseModifier.trim().uppercase()) {
+            "CTRL", "CONTROL" -> Win32Bindings.VK_CONTROL
+            "ALT" -> Win32Bindings.VK_MENU
+            else -> Win32Bindings.VK_SHIFT
+        }
+
+        fun resolveReverseModifierVks(reverseModifier: String): IntArray = when (reverseModifier.trim().uppercase()) {
+            "CTRL", "CONTROL" -> intArrayOf(Win32Bindings.VK_CONTROL, Win32Bindings.VK_LCONTROL, Win32Bindings.VK_RCONTROL)
+            "ALT" -> intArrayOf(Win32Bindings.VK_MENU, Win32Bindings.VK_LMENU, Win32Bindings.VK_RMENU)
+            else -> intArrayOf(Win32Bindings.VK_SHIFT, Win32Bindings.VK_LSHIFT, Win32Bindings.VK_RSHIFT)
+        }
+
+        fun resolveTriggerVk(triggerKey: String): Int {
+            val normalized = triggerKey.trim().uppercase()
+            return when (normalized) {
+                "TAB" -> Win32Bindings.VK_TAB
+                "SPACE" -> Win32Bindings.VK_SPACE
+                "BACKTICK", "GRAVE", "`" -> Win32Bindings.VK_OEM_3
+                else -> if (normalized.length == 1 && normalized[0] in 'A'..'Z') {
+                    normalized[0].code
+                } else {
+                    Win32Bindings.VK_TAB
+                }
+            }
+        }
+
+        fun resolveIsAltModifier(modifier: String): Boolean = when (modifier.trim().uppercase()) {
+            "CTRL", "CONTROL", "WIN", "WINDOWS" -> false
+            else -> true
+        }
+    }
 }
 
 /**
