@@ -1,4 +1,4 @@
-# Usage &amp; Keyboard Shortcuts
+# Usage & Keyboard Shortcuts
 
 %product% (`%cmd_name%`) combines classic muscle-memory `Alt+Tab` window flipping with an interactive, keyboard-driven fuzzy launcher and window manager.
 
@@ -26,7 +26,7 @@ At any moment while the overlay is open, performing any interactive action trans
 
 Once locked in **`INTERACTIVE_SEARCH`** mode, **releasing `Alt` does not close the overlay**. You can release all modifiers, type multi-word search queries comfortably with both hands, close or minimize clutter windows in-place, and finally press `Enter` (or click a row) to switch—or press `Esc` to cancel.
 
-## Keyboard &amp; Mouse Shortcuts
+## Keyboard & Mouse Shortcuts
 
 ### Global Hotkeys
 
@@ -39,7 +39,7 @@ Once locked in **`INTERACTIVE_SEARCH`** mode, **releasing `Alt` does not close t
 >
 {style="tip"}
 
-### Navigation &amp; Selection (Overlay Open)
+### Navigation & Selection (Overlay Open)
 
 | Shortcut / Input | Mode Effect | Action |
 | :--- | :--- | :--- |
@@ -68,7 +68,7 @@ You can tidy up open windows directly from the switcher list without dismissing 
 >
 {style="note"}
 
-## Row Layout &amp; Visual Badges
+## Row Layout & Visual Badges
 
 Each row in the switcher overlay displays contextual cues from left to right:
 
@@ -93,7 +93,7 @@ Right-clicking the **%product% (%cmd_name%)** icon in the Windows system tray op
 
 <seealso>
     <category ref="user-guide">
-        <a href="search-and-filtering.md">Search &amp; Window Filtering</a>
-        <a href="configuration.md">Configuration Reference</a>
+        <a href="search-and-filtering.md"/>
+        <a href="configuration.md"/>
     </category>
 </seealso>

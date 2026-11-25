@@ -1,4 +1,4 @@
-# Search &amp; Window Filtering
+# Search & Window Filtering
 
 %product% (`%cmd_name%`) pairs strict desktop window hygiene with a fast, multi-token fuzzy search engine (`WindowFilter`) capable of ranking 100+ open windows in well under 5 ms.
 
@@ -18,11 +18,11 @@ When you type in the search field, `WindowFilter` trims leading/trailing whitesp
 | `ij kws` | `kwswitcher – Main.kt` (`idea64`) or `IntelliJ IDEA` | `ij` matches camelCase/word boundaries or subsequence, while `kws` matches the `kwswitcher` prefix. |
 | `term log` | `Server Logs` (`WindowsTerminal`) | `term` matches a word boundary (`Windows` + `Terminal`) in the process name; `log` matches `Logs` in the title. |
 
-## Ranking Tiers &amp; Scoring
+## Ranking Tiers & Scoring
 
 Each query token is scored independently against the window title and process name using five ordered tiers (highest applicable tier wins per field), and token scores are summed across the query:
 
-| Tier | Match Type | Base Score &amp; Bonuses | Example (`token` -> `Target`) |
+| Tier | Match Type | Base Score & Bonuses | Example (`token` -> `Target`) |
 | :--- | :--- | :--- | :--- |
 | **1** | **Exact Prefix** | `1000` + length bonus (`0..100`, favoring shorter/tighter strings) | `code` -> `Code.exe`, `slack` -> `Slack` |
 | **2a** | **Word-Boundary / CamelCase Prefix** | `750` + position bonus (`0..80`, favoring earlier word boundaries) | `term` -> `WindowsTerminal`, `switch` -> `Kotlin Switcheroo` |
@@ -30,7 +30,7 @@ Each query token is scored independently against the window title and process na
 | **3** | **Contiguous Substring** | `400` + position bonus (`0..80`, favoring earlier occurrences) | `switch` -> `kwswitcher` |
 | **4** | **Compact Fuzzy Subsequence** | `120` + `25` per consecutive char pair + `20` per boundary hit + `0..40` compactness bonus | `wfltr` -> `WindowFilter.kt` |
 
-### Word Boundaries, Noise Rejection &amp; Tie-Breaking
+### Word Boundaries, Noise Rejection & Tie-Breaking
 
 * **Word-boundary detection:** Index `0`, any letter or digit immediately following punctuation/whitespace, `lowerCase` -> `UpperCase` camelCase transitions, and `Letter` -> `Digit` transitions all count as word boundaries.
 * **Scattered noise rejection:** In Tier 4 (fuzzy subsequence), if the matched characters are spread across a span wider than `token.length * 4 + 4`, the match is rejected so short 1–2 character tokens do not match random unrelated long window titles.
@@ -48,18 +48,18 @@ Each query token is scored independently against the window title and process na
 Before search scoring runs, `WindowEnumerator` walks top-level windows on the **current virtual desktop** via `EnumWindows` and automatically excludes non-interactive shell clutter:
 
 1. **Invisible or disabled windows:** Excluded when `IsWindowVisible` or `IsWindowEnabled` returns `0` (for example, background helper HWNDs or modal-blocked parent frames).
-2. **Tool &amp; non-activatable windows:** Excluded when `GWL_EXSTYLE` has `WS_EX_NOACTIVATE`, or has `WS_EX_TOOLWINDOW` without `WS_EX_APPWINDOW`.
-3. **DWM-cloaked &amp; other-desktop windows:** Excluded when `DwmGetWindowAttribute(DWMWA_CLOAKED)` is non-zero—filtering out suspended UWP background frames and windows located on *other* Windows virtual desktops.
+2. **Tool & non-activatable windows:** Excluded when `GWL_EXSTYLE` has `WS_EX_NOACTIVATE`, or has `WS_EX_TOOLWINDOW` without `WS_EX_APPWINDOW`.
+3. **DWM-cloaked & other-desktop windows:** Excluded when `DwmGetWindowAttribute(DWMWA_CLOAKED)` is non-zero—filtering out suspended UWP background frames and windows located on *other* Windows virtual desktops.
 4. **Untitled windows:** Excluded when `GetWindowTextW` is empty or whitespace-only.
 5. **Self-exclusion:** `%cmd_name%`'s own `Kotlin Switcheroo Overlay` dialog is always excluded.
 6. **User ignore rules:** Any window whose process name matches `ignoredProcesses` or whose title matches a regex in `ignoredTitlePatterns` in `%\APPDATA%\kwswitcher\config.json` is excluded.
 
 <seealso>
     <category ref="user-guide">
-        <a href="usage-and-shortcuts.md">Usage &amp; Keyboard Shortcuts</a>
-        <a href="configuration.md">Configuration Reference</a>
+        <a href="usage-and-shortcuts.md"/>
+        <a href="configuration.md"/>
     </category>
     <category ref="developer-guide">
-        <a href="architecture.md">System Architecture</a>
+        <a href="architecture.md"/>
     </category>
 </seealso>

@@ -1,6 +1,6 @@
-# Win32 &amp; Panama FFM Internals
+# Win32 & Panama FFM Internals
 
-%product% (`%cmd_name%`) interacts with the Windows OS exclusively through JDK %jdk_version%'s finalized **Project Panama Foreign Function &amp; Memory (`java.lang.foreign`)** API—requiring zero JNI C/C++ glue libraries and zero third-party native dependencies such as JNA.
+%product% (`%cmd_name%`) interacts with the Windows OS exclusively through JDK %jdk_version%'s finalized **Project Panama Foreign Function and Memory (`java.lang.foreign`)** API—requiring zero JNI C/C++ glue libraries and zero third-party native dependencies such as JNA.
 
 ## Native Binding Architecture (`Win32Bindings.kt`)
 
@@ -14,7 +14,7 @@ All Win32 downcall `MethodHandle` bindings, C struct `MemoryLayout` definitions,
     * `advapi32.dll` — `RegGetValueW`, `RegSetKeyValueW`, `RegDeleteKeyValueW`, `RegDeleteKeyW`
 * **Zero-Boxing Invocation:** Every native call uses `MethodHandle.invokeExact(...)` against precomputed `FunctionDescriptor` layouts, avoiding reflection and per-call descriptor allocation.
 
-## Five Critical Win32 &amp; Panama Edge-Case Mitigations
+## Five Critical Win32 & Panama Edge-Case Mitigations
 
 Desktop window managers on Windows face subtle OS traps—from frozen GUI message queues to focus-stealing locks and GDI handle exhaustion. `%cmd_name%` enforces five explicit engineering mitigations across `win32/`:
 
@@ -34,7 +34,7 @@ Calling a synchronous `SendMessageW(hwnd, WM_GETICON, ...)` on an unresponsive (
 
 1. **50 ms hung-abort timeout:** Queries `ICON_SMALL2`, `ICON_SMALL`, and `ICON_BIG` using `SendMessageTimeoutW` with `SMTO_ABORTIFHUNG` and a strict `50 ms` timeout.
 2. **Multi-tier fallback chain:** If `SendMessageTimeoutW` times out or returns `NULL`, `IconExtractor` falls back to `GetClassLongPtrW` (`GCLP_HICONSM` / `GCLP_HICON`), then `FileSystemView.getSystemIcon(File(exePath))`, and finally a crisp vector-painted fallback icon.
-3. **Async EDT decoupling &amp; LRU caching:** `WindowListCellRenderer` calls `getIconOrDefault()`, which returns immediately on the Swing EDT (serving from a `128`-entry LRU cache keyed by lowercase `exePath` or returning the default icon while deduplicated background coroutines resolve and repaint the row).
+3. **Async EDT decoupling & LRU caching:** `WindowListCellRenderer` calls `getIconOrDefault()`, which returns immediately on the Swing EDT (serving from a `128`-entry LRU cache keyed by lowercase `exePath` or returning the default icon while deduplicated background coroutines resolve and repaint the row).
 
 ### 3. Bypassing Windows Foreground Lock (`SetForegroundWindow`)
 
@@ -47,7 +47,7 @@ When activating a target window in `WindowActivator.activate()`:
 3. `sendZeroEffectAltKeyTap` dispatches a synthetic two-event `VK_MENU` keydown + keyup sequence via `SendInput` inside a confined `Arena` to satisfy Windows' recent-input requirement.
 4. `BringWindowToTop` and `SetForegroundWindow` promote the window, and a `finally` block guarantees `AttachThreadInput(..., 0)` detaches thread input cleanly.
 
-### 4. Administrator &amp; Elevated Windows (UIPI)
+### 4. Administrator & Elevated Windows (UIPI)
 
 Windows **User Interface Privilege Isolation (UIPI)** isolates lower-integrity processes from higher-integrity (Administrator) windows:
 
@@ -55,16 +55,16 @@ Windows **User Interface Privilege Isolation (UIPI)** isolates lower-integrity p
 * Similarly, unelevated `PostMessageW(WM_CLOSE)` and `OpenProcess(PROCESS_TERMINATE)` calls against elevated targets fail gracefully (`WindowActivator` checks return codes and `MemorySegment.NULL` handles without throwing).
 * Users who want seamless switching out of elevated windows can run `kwswitcher.exe` elevated via a Windows Task Scheduler logon task configured with **Run with highest privileges**.
 
-### 5. Preventing GDI &amp; Kernel `HANDLE` Leaks
+### 5. Preventing GDI & Kernel `HANDLE` Leaks
 
 Long-running tray utilities must never leak kernel handles or GDI objects across thousands of invocations:
 
-* **Process &amp; Mutex Handles:** Every `HANDLE` returned by `OpenProcess` (`WindowEnumerator.queryProcessImagePath` and `WindowActivator.terminateProcess`) is closed via `CloseHandle` inside a `try / finally` block. `SingleInstanceMutex.close()` releases and closes the named mutex (`ReleaseMutex` + `CloseHandle`) via a JVM shutdown hook and explicit `Quit` handler.
-* **GDI Bitmaps &amp; Device Contexts:** `GetIconInfo` allocates *new* `HBITMAP` copies (`hbmMask` and `hbmColor`) that the caller owns. `IconExtractor.convertHIconToImage()` extracts 32-bit top-down ARGB pixels via `CreateCompatibleDC` + `GetDIBits` and unconditionally calls `DeleteDC(hdc)`, `DeleteObject(hbmMask)`, and `DeleteObject(hbmColor)` in `finally`.
+* **Process & Mutex Handles:** Every `HANDLE` returned by `OpenProcess` (`WindowEnumerator.queryProcessImagePath` and `WindowActivator.terminateProcess`) is closed via `CloseHandle` inside a `try / finally` block. `SingleInstanceMutex.close()` releases and closes the named mutex (`ReleaseMutex` + `CloseHandle`) via a JVM shutdown hook and explicit `Quit` handler.
+* **GDI Bitmaps & Device Contexts:** `GetIconInfo` allocates *new* `HBITMAP` copies (`hbmMask` and `hbmColor`) that the caller owns. `IconExtractor.convertHIconToImage()` extracts 32-bit top-down ARGB pixels via `CreateCompatibleDC` + `GetDIBits` and unconditionally calls `DeleteDC(hdc)`, `DeleteObject(hbmMask)`, and `DeleteObject(hbmColor)` in `finally`.
 
 <seealso>
     <category ref="developer-guide">
-        <a href="architecture.md">System Architecture</a>
-        <a href="building-and-releasing.md">Building, Testing &amp; Releasing</a>
+        <a href="architecture.md"/>
+        <a href="building-and-releasing.md"/>
     </category>
 </seealso>

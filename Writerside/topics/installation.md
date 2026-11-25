@@ -80,7 +80,7 @@ If you regularly switch *out of* elevated Administrator windows using `%cmd_name
 
 <seealso>
     <category ref="user-guide">
-        <a href="usage-and-shortcuts.md">Usage &amp; Keyboard Shortcuts</a>
-        <a href="configuration.md">Configuration Reference</a>
+        <a href="usage-and-shortcuts.md"/>
+        <a href="configuration.md"/>
     </category>
 </seealso>

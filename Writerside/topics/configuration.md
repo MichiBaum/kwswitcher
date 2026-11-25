@@ -62,7 +62,7 @@ Controls the global low-level keyboard shortcut intercepted by `KeyboardHook` (`
 >
 {style="warning"}
 
-### Appearance &amp; Badges
+### Appearance & Badges
 
 | Property | Type | Default | Accepted Values | Description |
 | :--- | :--- | :--- | :--- | :--- |
@@ -133,8 +133,8 @@ If you want Windows Explorer's built-in `Alt+Tab` to remain untouched while invo
 
 <seealso>
     <category ref="user-guide">
-        <a href="installation.md">Installation</a>
-        <a href="usage-and-shortcuts.md">Usage &amp; Keyboard Shortcuts</a>
-        <a href="search-and-filtering.md">Search &amp; Window Filtering</a>
+        <a href="installation.md"/>
+        <a href="usage-and-shortcuts.md"/>
+        <a href="search-and-filtering.md"/>
     </category>
 </seealso>

@@ -1,4 +1,4 @@
-# Building, Testing &amp; Releasing
+# Building, Testing & Releasing
 
 This guide covers building and testing %product% (`%cmd_name%`) locally with Maven, packaging native Windows distributions, authoring Writerside documentation, and cutting automated GitHub releases.
 
@@ -9,9 +9,9 @@ This guide covers building and testing %product% (`%cmd_name%`) locally with Mav
 * **Maven:** Included via the repository's Maven Wrapper (`.\mvnw.cmd`).
 * **WiX Toolset *(optional)*:** Required on `PATH` only when building `.msi` installers with `-Pjpackage-installer` ([wixtoolset.org](https://wixtoolset.org/)).
 
-## Build, Test &amp; Run Commands
+## Build, Test & Run Commands
 
-### Run Unit &amp; Win32 Engine Tests
+### Run Unit & Win32 Engine Tests
 
 ```powershell
 .\mvnw.cmd test
@@ -73,13 +73,13 @@ The resulting `.msi` installer is written to `target\dist\`.
 </tab>
 </tabs>
 
-## Authoring &amp; Validating Documentation (`Writerside/`)
+## Authoring & Validating Documentation (`Writerside/`)
 
 All user and developer documentation lives in the `Writerside/` help module (`kws` instance defined in `Writerside/kws.tree`):
 
 * **IDE Preview:** Open the repository in IntelliJ IDEA with the **JetBrains Writerside** plugin installed to get live preview, schema completion, and link inspections. Because `.idea/` is gitignored, `Writerside/` is completely self-contained.
 * **Escaping Windows `%...%` Variables:** Writerside interpolates `%\var%` tokens from `Writerside/v.list` by default. When writing literal Windows environment variables such as `%\APPDATA%`, place a backslash immediately after the opening percent sign in prose/inline code, or attach `{ignore-vars="true"}` immediately below any fenced code block containing literal `%...%` paths.
-* **Local Docker Build &amp; Check:** If Docker is running locally, you can reproduce the exact CI build and quality gate from PowerShell:
+* **Local Docker Build & Check:** If Docker is running locally, you can reproduce the exact CI build and quality gate from PowerShell:
 
 ```powershell
 docker run --rm -v "${PWD}:/opt/sources" `
@@ -87,7 +87,7 @@ docker run --rm -v "${PWD}:/opt/sources" `
   /bin/bash -c "export DISPLAY=:99 && Xvfb :99 & /opt/builder/bin/idea.sh helpbuilderinspect -source-dir /opt/sources -product Writerside/kws --runner other -output-dir /opt/sources/artifacts/"
 ```
 
-## Release &amp; GitHub Pages CI/CD
+## Release & GitHub Pages CI/CD
 
 Releases and documentation deployments are automated by two decoupled GitHub Actions workflows triggered whenever a `v*` tag is pushed (or via manual **Run workflow** dispatch in the GitHub Actions UI):
 
@@ -109,14 +109,14 @@ git push origin v1.0.0
 
 ## Engineering Milestone History
 
-* **Phase 1 — Core Win32 Engine &amp; Maven Foundation:** JDK %jdk_version% Maven setup, Panama FFM `Win32Bindings`, `WindowEnumerator`, `WindowActivator`, `KeyboardHook` (`WH_KEYBOARD_LL`), `SwitcherStateMachine` (`QUICK_SWITCH` &amp; `INTERACTIVE_SEARCH`), and FlatLaf `SwitcherOverlay`.
-* **Phase 2 — Multi-Token Fuzzy Search, Icons, Badges &amp; Window Actions:** Async LRU `IconExtractor`, `WindowInfo` monitor/minimized metadata, multi-token ranked `WindowFilter` with direct-painted highlight spans, and in-switcher close/minimize/two-step kill actions.
-* **Phase 3 — Configuration, Themes, Multi-Monitor Placement, Tray &amp; Packaging:** `%\APPDATA%\kwswitcher\config.json` persistence, `DARK`/`LIGHT`/`SYSTEM` theme management, active-monitor centering, `SingleInstanceMutex`, `SystemTrayController`, `StartupRegistry`, and `jpackage` profiles.
+* **Phase 1 — Core Win32 Engine & Maven Foundation:** JDK %jdk_version% Maven setup, Panama FFM `Win32Bindings`, `WindowEnumerator`, `WindowActivator`, `KeyboardHook` (`WH_KEYBOARD_LL`), `SwitcherStateMachine` (`QUICK_SWITCH` & `INTERACTIVE_SEARCH`), and FlatLaf `SwitcherOverlay`.
+* **Phase 2 — Multi-Token Fuzzy Search, Icons, Badges & Window Actions:** Async LRU `IconExtractor`, `WindowInfo` monitor/minimized metadata, multi-token ranked `WindowFilter` with direct-painted highlight spans, and in-switcher close/minimize/two-step kill actions.
+* **Phase 3 — Configuration, Themes, Multi-Monitor Placement, Tray & Packaging:** `%\APPDATA%\kwswitcher\config.json` persistence, `DARK`/`LIGHT`/`SYSTEM` theme management, active-monitor centering, `SingleInstanceMutex`, `SystemTrayController`, `StartupRegistry`, and `jpackage` profiles.
 
 <seealso>
     <category ref="developer-guide">
-        <a href="architecture.md">System Architecture</a>
-        <a href="win32-panama-ffm.md">Win32 &amp; Panama FFM Internals</a>
+        <a href="architecture.md"/>
+        <a href="win32-panama-ffm.md"/>
     </category>
     <category ref="external">
         <a href="https://github.com/MichiBaum/kwswitcher/actions">GitHub Actions Workflows</a>
