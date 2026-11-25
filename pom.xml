@@ -6,7 +6,7 @@
 
     <groupId>com.michibaum</groupId>
     <artifactId>kwswitcher</artifactId>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>1.1.0</version>
     <packaging>jar</packaging>
 
     <name>kwswitcher</name>
@@ -20,7 +20,30 @@
         <coroutines.version>1.10.2</coroutines.version>
         <flatlaf.version>3.5.4</flatlaf.version>
         <junit.version>5.12.2</junit.version>
+        <kover.version>0.9.8</kover.version>
+        <detekt.version>2.0.0-alpha.6</detekt.version>
+        <detekt.skip>false</detekt.skip>
+        <gitflow.version>1.21.0</gitflow.version>
+        <gitflow.mvnExecutable>${project.basedir}/mvnw</gitflow.mvnExecutable>
+        <argLine></argLine>
         <main.class>com.michibaum.kwswitcher.MainKt</main.class>
+
+        <!-- JDK 25 + Tuned G1GC flags shared by exec:exec and jpackage -->
+        <jvm.flag.nativeAccess>--enable-native-access=ALL-UNNAMED</jvm.flag.nativeAccess>
+        <jvm.flag.compactHeaders>-XX:+UseCompactObjectHeaders</jvm.flag.compactHeaders>
+        <jvm.flag.gc>-XX:+UseG1GC</jvm.flag.gc>
+        <jvm.flag.xms>-Xms16m</jvm.flag.xms>
+        <jvm.flag.xmx>-Xmx96m</jvm.flag.xmx>
+        <jvm.flag.maxPause>-XX:MaxGCPauseMillis=10</jvm.flag.maxPause>
+        <jvm.flag.minFree>-XX:MinHeapFreeRatio=10</jvm.flag.minFree>
+        <jvm.flag.maxFree>-XX:MaxHeapFreeRatio=30</jvm.flag.maxFree>
+
+        <!-- jpackage metadata & trimmed runtime configuration -->
+        <jpackage.vendor>michibaum</jpackage.vendor>
+        <jpackage.icon>${project.basedir}/src/main/resources/icons/kwswitcher.ico</jpackage.icon>
+        <jpackage.modules>java.base,java.desktop</jpackage.modules>
+        <jpackage.jlinkOptions>--strip-native-commands --strip-debug --no-man-pages --no-header-files --compress=zip-6</jpackage.jlinkOptions>
+        <jpackage.win.upgradeUuid>8f4c2e91-5b7a-4d3e-9c12-6a0f8e4d2b19</jpackage.win.upgradeUuid>
     </properties>
 
     <dependencies>
@@ -71,6 +94,35 @@
 
         <plugins>
             <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>build-helper-maven-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <id>parse-version</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>parse-version</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>set-jpackage-app-version</id>
+                        <phase>validate</phase>
+                        <goals>
+                            <goal>regex-property</goal>
+                        </goals>
+                        <configuration>
+                            <name>jpackage.appVersion</name>
+                            <value>${parsedVersion.majorVersion}.${parsedVersion.minorVersion}.${parsedVersion.incrementalVersion}</value>
+                            <regex>-.*</regex>
+                            <replacement/>
+                            <failIfNoMatch>false</failIfNoMatch>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
                 <groupId>org.jetbrains.kotlin</groupId>
                 <artifactId>kotlin-maven-plugin</artifactId>
                 <version>${kotlin.version}</version>
@@ -98,8 +150,29 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.2</version>
                 <configuration>
-                    <argLine>--enable-native-access=ALL-UNNAMED</argLine>
+                    <argLine>@{argLine} ${jvm.flag.nativeAccess}</argLine>
                 </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.jetbrains.kotlinx</groupId>
+                <artifactId>kover-maven-plugin</artifactId>
+                <version>${kover.version}</version>
+                <executions>
+                    <execution>
+                        <id>kover-instrumentation</id>
+                        <goals>
+                            <goal>instrumentation</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>kover-report</id>
+                        <goals>
+                            <goal>report-xml</goal>
+                            <goal>report-html</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
 
             <plugin>
@@ -109,33 +182,19 @@
                 <configuration>
                     <executable>java</executable>
                     <arguments>
-                        <argument>--enable-native-access=ALL-UNNAMED</argument>
-                        <argument>-Xmx128m</argument>
-                        <argument>-XX:+UseG1GC</argument>
+                        <argument>${jvm.flag.nativeAccess}</argument>
+                        <argument>${jvm.flag.compactHeaders}</argument>
+                        <argument>${jvm.flag.gc}</argument>
+                        <argument>${jvm.flag.xms}</argument>
+                        <argument>${jvm.flag.xmx}</argument>
+                        <argument>${jvm.flag.maxPause}</argument>
+                        <argument>${jvm.flag.minFree}</argument>
+                        <argument>${jvm.flag.maxFree}</argument>
                         <argument>-classpath</argument>
                         <classpath/>
                         <argument>${main.class}</argument>
                     </arguments>
                 </configuration>
-            </plugin>
-
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-dependency-plugin</artifactId>
-                <version>3.8.1</version>
-                <executions>
-                    <execution>
-                        <id>copy-dependencies</id>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>copy-dependencies</goal>
-                        </goals>
-                        <configuration>
-                            <outputDirectory>${project.build.directory}/jpackage-input</outputDirectory>
-                            <includeScope>runtime</includeScope>
-                        </configuration>
-                    </execution>
-                </executions>
             </plugin>
 
             <plugin>
@@ -181,44 +240,116 @@
                     </execution>
                 </executions>
             </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <dependencies>
+                    <dependency>
+                        <groupId>dev.detekt</groupId>
+                        <artifactId>detekt-cli</artifactId>
+                        <version>${detekt.version}</version>
+                    </dependency>
+                </dependencies>
+                <executions>
+                    <execution>
+                        <id>detekt</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <skip>${detekt.skip}</skip>
+                            <target>
+                                <mkdir dir="${project.build.directory}/detekt"/>
+                                <java classname="dev.detekt.cli.Main"
+                                      fork="true"
+                                      failonerror="true">
+                                    <classpath refid="maven.plugin.classpath"/>
+                                    <arg value="--input"/>
+                                    <arg value="${project.basedir}/src/main/kotlin${path.separator}${project.basedir}/src/test/kotlin"/>
+                                    <arg value="--config"/>
+                                    <arg value="${project.basedir}/config/detekt/detekt.yml"/>
+                                    <arg value="--baseline"/>
+                                    <arg value="${project.basedir}/config/detekt/baseline.xml"/>
+                                    <arg value="--build-upon-default-config"/>
+                                    <arg value="--jvm-target"/>
+                                    <arg value="${kotlin.compiler.jvmTarget}"/>
+                                    <arg value="--parallel"/>
+                                    <arg value="--base-path"/>
+                                    <arg value="${project.basedir}"/>
+                                    <arg value="--report"/>
+                                    <arg value="html:${project.build.directory}/detekt/detekt.html"/>
+                                    <arg value="--report"/>
+                                    <arg value="sarif:${project.build.directory}/detekt/detekt.sarif"/>
+                                </java>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>com.amashchenko.maven.plugin</groupId>
+                <artifactId>gitflow-maven-plugin</artifactId>
+                <version>${gitflow.version}</version>
+                <configuration>
+                    <mvnExecutable>${gitflow.mvnExecutable}</mvnExecutable>
+                    <skipFeatureVersion>true</skipFeatureVersion>
+                    <skipTestProject>true</skipTestProject>
+                    <preFeatureFinishGoals>verify</preFeatureFinishGoals>
+                    <preReleaseGoals>verify</preReleaseGoals>
+                    <preHotfixGoals>verify</preHotfixGoals>
+                    <digitsOnlyDevVersion>false</digitsOnlyDevVersion>
+                    <gitFlowConfig>
+                        <productionBranch>main</productionBranch>
+                        <developmentBranch>develop</developmentBranch>
+                        <featureBranchPrefix>feature/</featureBranchPrefix>
+                        <releaseBranchPrefix>release/</releaseBranchPrefix>
+                        <hotfixBranchPrefix>hotfix/</hotfixBranchPrefix>
+                        <supportBranchPrefix>support/</supportBranchPrefix>
+                        <origin>origin</origin>
+                    </gitFlowConfig>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 
     <profiles>
+        <profile>
+            <id>windows-mvnw</id>
+            <activation>
+                <os>
+                    <family>windows</family>
+                </os>
+            </activation>
+            <properties>
+                <gitflow.mvnExecutable>${project.basedir}\mvnw.cmd</gitflow.mvnExecutable>
+            </properties>
+        </profile>
         <profile>
             <id>jpackage</id>
             <build>
                 <plugins>
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-resources-plugin</artifactId>
-                        <version>3.3.1</version>
-                        <executions>
-                            <execution>
-                                <id>stage-jpackage-input</id>
-                                <phase>package</phase>
-                                <goals>
-                                    <goal>copy-resources</goal>
-                                </goals>
-                                <configuration>
-                                    <outputDirectory>${project.build.directory}/jpackage-input</outputDirectory>
-                                    <resources>
-                                        <resource>
-                                            <directory>${project.build.directory}</directory>
-                                            <includes>
-                                                <include>${project.build.finalName}.jar</include>
-                                            </includes>
-                                        </resource>
-                                    </resources>
-                                </configuration>
-                            </execution>
-                        </executions>
-                    </plugin>
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-antrun-plugin</artifactId>
                         <version>3.1.0</version>
                         <executions>
+                            <execution>
+                                <id>clean-jpackage-staging</id>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>run</goal>
+                                </goals>
+                                <configuration>
+                                    <target>
+                                        <delete dir="${project.build.directory}/jpackage-input"/>
+                                        <delete dir="${project.build.directory}/app-image"/>
+                                    </target>
+                                </configuration>
+                            </execution>
                             <execution>
                                 <id>jpackage-bundle</id>
                                 <phase>package</phase>
@@ -227,11 +358,19 @@
                                 </goals>
                                 <configuration>
                                     <target>
+                                        <copy file="${project.build.directory}/${project.build.finalName}.jar"
+                                              todir="${project.build.directory}/jpackage-input"/>
                                         <exec executable="jpackage" failonerror="true">
                                             <arg value="--type"/>
                                             <arg value="app-image"/>
                                             <arg value="--name"/>
                                             <arg value="kwswitcher"/>
+                                            <arg value="--vendor"/>
+                                            <arg value="${jpackage.vendor}"/>
+                                            <arg value="--app-version"/>
+                                            <arg value="${jpackage.appVersion}"/>
+                                            <arg value="--icon"/>
+                                            <arg value="${jpackage.icon}"/>
                                             <arg value="--input"/>
                                             <arg value="${project.build.directory}/jpackage-input"/>
                                             <arg value="--main-jar"/>
@@ -239,15 +378,47 @@
                                             <arg value="--main-class"/>
                                             <arg value="${main.class}"/>
                                             <arg value="--dest"/>
-                                            <arg value="${project.build.directory}/dist"/>
+                                            <arg value="${project.build.directory}/app-image"/>
+                                            <arg value="--add-modules"/>
+                                            <arg value="${jpackage.modules}"/>
+                                            <arg value="--jlink-options"/>
+                                            <arg value="${jpackage.jlinkOptions}"/>
                                             <arg value="--java-options"/>
-                                            <arg value="--enable-native-access=ALL-UNNAMED"/>
+                                            <arg value="${jvm.flag.nativeAccess}"/>
                                             <arg value="--java-options"/>
-                                            <arg value="-Xmx128m"/>
+                                            <arg value="${jvm.flag.compactHeaders}"/>
                                             <arg value="--java-options"/>
-                                            <arg value="-XX:+UseG1GC"/>
+                                            <arg value="${jvm.flag.gc}"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="${jvm.flag.xms}"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="${jvm.flag.xmx}"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="${jvm.flag.maxPause}"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="${jvm.flag.minFree}"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="${jvm.flag.maxFree}"/>
                                         </exec>
                                     </target>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <version>3.8.1</version>
+                        <executions>
+                            <execution>
+                                <id>copy-jpackage-dependencies</id>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>copy-dependencies</goal>
+                                </goals>
+                                <configuration>
+                                    <outputDirectory>${project.build.directory}/jpackage-input</outputDirectory>
+                                    <includeScope>runtime</includeScope>
                                 </configuration>
                             </execution>
                         </executions>
@@ -261,34 +432,23 @@
                 <plugins>
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-resources-plugin</artifactId>
-                        <version>3.3.1</version>
-                        <executions>
-                            <execution>
-                                <id>stage-jpackage-input-installer</id>
-                                <phase>package</phase>
-                                <goals>
-                                    <goal>copy-resources</goal>
-                                </goals>
-                                <configuration>
-                                    <outputDirectory>${project.build.directory}/jpackage-input</outputDirectory>
-                                    <resources>
-                                        <resource>
-                                            <directory>${project.build.directory}</directory>
-                                            <includes>
-                                                <include>${project.build.finalName}.jar</include>
-                                            </includes>
-                                        </resource>
-                                    </resources>
-                                </configuration>
-                            </execution>
-                        </executions>
-                    </plugin>
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-antrun-plugin</artifactId>
                         <version>3.1.0</version>
                         <executions>
+                            <execution>
+                                <id>clean-jpackage-installer-staging</id>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>run</goal>
+                                </goals>
+                                <configuration>
+                                    <target>
+                                        <delete dir="${project.build.directory}/jpackage-input"/>
+                                        <delete dir="${project.build.directory}/app-image"/>
+                                        <delete dir="${project.build.directory}/dist"/>
+                                    </target>
+                                </configuration>
+                            </execution>
                             <execution>
                                 <id>jpackage-installer-bundle</id>
                                 <phase>package</phase>
@@ -297,11 +457,19 @@
                                 </goals>
                                 <configuration>
                                     <target>
+                                        <copy file="${project.build.directory}/${project.build.finalName}.jar"
+                                              todir="${project.build.directory}/jpackage-input"/>
                                         <exec executable="jpackage" failonerror="true">
                                             <arg value="--type"/>
-                                            <arg value="msi"/>
+                                            <arg value="app-image"/>
                                             <arg value="--name"/>
                                             <arg value="kwswitcher"/>
+                                            <arg value="--vendor"/>
+                                            <arg value="${jpackage.vendor}"/>
+                                            <arg value="--app-version"/>
+                                            <arg value="${jpackage.appVersion}"/>
+                                            <arg value="--icon"/>
+                                            <arg value="${jpackage.icon}"/>
                                             <arg value="--input"/>
                                             <arg value="${project.build.directory}/jpackage-input"/>
                                             <arg value="--main-jar"/>
@@ -309,20 +477,68 @@
                                             <arg value="--main-class"/>
                                             <arg value="${main.class}"/>
                                             <arg value="--dest"/>
-                                            <arg value="${project.build.directory}/dist"/>
+                                            <arg value="${project.build.directory}/app-image"/>
+                                            <arg value="--add-modules"/>
+                                            <arg value="${jpackage.modules}"/>
+                                            <arg value="--jlink-options"/>
+                                            <arg value="${jpackage.jlinkOptions}"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="${jvm.flag.nativeAccess}"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="${jvm.flag.compactHeaders}"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="${jvm.flag.gc}"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="${jvm.flag.xms}"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="${jvm.flag.xmx}"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="${jvm.flag.maxPause}"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="${jvm.flag.minFree}"/>
+                                            <arg value="--java-options"/>
+                                            <arg value="${jvm.flag.maxFree}"/>
+                                        </exec>
+                                        <exec executable="jpackage" failonerror="true">
+                                            <arg value="--type"/>
+                                            <arg value="msi"/>
+                                            <arg value="--name"/>
+                                            <arg value="kwswitcher"/>
+                                            <arg value="--vendor"/>
+                                            <arg value="${jpackage.vendor}"/>
                                             <arg value="--app-version"/>
-                                            <arg value="${project.version}"/>
-                                            <arg value="--java-options"/>
-                                            <arg value="--enable-native-access=ALL-UNNAMED"/>
-                                            <arg value="--java-options"/>
-                                            <arg value="-Xmx128m"/>
-                                            <arg value="--java-options"/>
-                                            <arg value="-XX:+UseG1GC"/>
+                                            <arg value="${jpackage.appVersion}"/>
+                                            <arg value="--icon"/>
+                                            <arg value="${jpackage.icon}"/>
+                                            <arg value="--app-image"/>
+                                            <arg value="${project.build.directory}/app-image/kwswitcher"/>
+                                            <arg value="--dest"/>
+                                            <arg value="${project.build.directory}/dist"/>
+                                            <arg value="--win-upgrade-uuid"/>
+                                            <arg value="${jpackage.win.upgradeUuid}"/>
                                             <arg value="--win-dir-chooser"/>
                                             <arg value="--win-menu"/>
                                             <arg value="--win-shortcut"/>
                                         </exec>
                                     </target>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <version>3.8.1</version>
+                        <executions>
+                            <execution>
+                                <id>copy-jpackage-installer-dependencies</id>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>copy-dependencies</goal>
+                                </goals>
+                                <configuration>
+                                    <outputDirectory>${project.build.directory}/jpackage-input</outputDirectory>
+                                    <includeScope>runtime</includeScope>
                                 </configuration>
                             </execution>
                         </executions>

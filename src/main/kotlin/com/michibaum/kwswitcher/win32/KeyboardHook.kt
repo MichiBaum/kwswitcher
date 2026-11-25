@@ -6,7 +6,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import java.lang.foreign.Arena
 import java.lang.foreign.MemorySegment
-import java.lang.foreign.ValueLayout
+import java.lang.invoke.MethodHandle
 import java.lang.invoke.MethodHandles
 import java.lang.invoke.MethodType
 import java.util.concurrent.CountDownLatch
@@ -27,7 +27,7 @@ sealed interface HookKeyEvent {
  * with a `WH_KEYBOARD_LL` upcall stub to intercept the configured switcher hotkey (`FR-1`).
  */
 class KeyboardHook(
-    private val hotkeyConfigProvider: () -> HotkeyConfig = { HotkeyConfig() },
+    private val hotkeyConfigProvider: () -> HotkeyConfig = { DEFAULT_HOTKEY_CONFIG },
 ) : AutoCloseable {
     private val eventChannel = Channel<HookKeyEvent>(Channel.UNLIMITED)
     val events: Flow<HookKeyEvent> = eventChannel.receiveAsFlow()
@@ -73,23 +73,14 @@ class KeyboardHook(
         startedLatch: CountDownLatch,
         installedOk: AtomicBoolean,
     ) {
-        val threadId = Win32Bindings.GetCurrentThreadId.invokeExact() as Int
+        val threadId = Win32Bindings.Hook.GetCurrentThreadId.invokeExact() as Int
         hookThreadId.set(threadId)
 
         Arena.ofShared().use { arena ->
             val callback = HookCallback { nCode, wParam, lParam ->
                 handleLowLevelKey(nCode = nCode, wParam = wParam, lParam = lParam)
             }
-            val callbackHandle = MethodHandles.lookup().findVirtual(
-                HookCallback::class.java,
-                "invoke",
-                MethodType.methodType(
-                    Long::class.javaPrimitiveType,
-                    Int::class.javaPrimitiveType,
-                    Long::class.javaPrimitiveType,
-                    MemorySegment::class.java,
-                ),
-            ).bindTo(callback)
+            val callbackHandle = HOOK_CALLBACK_HANDLE.bindTo(callback)
 
             val upcallStub = Win32Bindings.linker.upcallStub(
                 callbackHandle,
@@ -97,8 +88,8 @@ class KeyboardHook(
                 arena,
             )
 
-            val moduleHandle = Win32Bindings.GetModuleHandleW.invokeExact(MemorySegment.NULL) as MemorySegment
-            val hookHandle = Win32Bindings.SetWindowsHookExW.invokeExact(
+            val moduleHandle = Win32Bindings.Hook.GetModuleHandleW.invokeExact(MemorySegment.NULL) as MemorySegment
+            val hookHandle = Win32Bindings.Hook.SetWindowsHookExW.invokeExact(
                 Win32Bindings.WH_KEYBOARD_LL,
                 upcallStub,
                 moduleHandle,
@@ -117,7 +108,7 @@ class KeyboardHook(
             try {
                 val msg = arena.allocate(Win32Bindings.MSG_LAYOUT)
                 while (running.get()) {
-                    val result = Win32Bindings.GetMessageW.invokeExact(
+                    val result = Win32Bindings.Hook.GetMessageW.invokeExact(
                         msg,
                         MemorySegment.NULL,
                         0,
@@ -126,11 +117,11 @@ class KeyboardHook(
                     if (result <= 0) {
                         break
                     }
-                    Win32Bindings.TranslateMessage.invokeExact(msg) as Int
-                    Win32Bindings.DispatchMessageW.invokeExact(msg) as Long
+                    Win32Bindings.Hook.TranslateMessage.invokeExact(msg) as Int
+                    Win32Bindings.Hook.DispatchMessageW.invokeExact(msg) as Long
                 }
             } finally {
-                Win32Bindings.UnhookWindowsHookEx.invokeExact(hookHandle) as Int
+                Win32Bindings.Hook.UnhookWindowsHookEx.invokeExact(hookHandle) as Int
             }
         }
     }
@@ -142,8 +133,8 @@ class KeyboardHook(
     ): Long {
         if (nCode >= Win32Bindings.HC_ACTION && lParam != MemorySegment.NULL) {
             val structSegment = lParam.reinterpret(Win32Bindings.KBDLLHOOKSTRUCT_LAYOUT.byteSize())
-            val vkCode = structSegment.get(ValueLayout.JAVA_INT, 0L)
-            val flags = structSegment.get(ValueLayout.JAVA_INT, 8L)
+            val vkCode = Win32Bindings.KBDLL_VK_CODE.get(structSegment) as Int
+            val flags = Win32Bindings.KBDLL_FLAGS.get(structSegment) as Int
             val message = wParam.toInt()
 
             val shouldSwallow = processKeyMessage(
@@ -155,7 +146,7 @@ class KeyboardHook(
                 return 1L
             }
         }
-        return Win32Bindings.CallNextHookEx.invokeExact(
+        return Win32Bindings.Hook.CallNextHookEx.invokeExact(
             MemorySegment.NULL,
             nCode,
             wParam,
@@ -172,7 +163,7 @@ class KeyboardHook(
         val isKeyDown = message == Win32Bindings.WM_KEYDOWN || message == Win32Bindings.WM_SYSKEYDOWN
         val isKeyUp = message == Win32Bindings.WM_KEYUP || message == Win32Bindings.WM_SYSKEYUP
 
-        if (vkCode in hotkey.modifierVkCodes()) {
+        if (hotkey.matchesModifierVk(vkCode)) {
             if (isKeyDown) {
                 modifierHeld = true
             } else if (isKeyUp && modifierHeld) {
@@ -182,7 +173,7 @@ class KeyboardHook(
             return false
         }
 
-        if (vkCode in hotkey.reverseModifierVkCodes()) {
+        if (hotkey.matchesReverseModifierVk(vkCode)) {
             if (isKeyDown) {
                 reverseModifierHeld = true
             } else if (isKeyUp) {
@@ -191,11 +182,11 @@ class KeyboardHook(
             return false
         }
 
-        if (vkCode == hotkey.triggerVkCode()) {
+        if (vkCode == hotkey.triggerVkCode) {
             val altDownFlag = hotkey.isAltModifier && (flags and Win32Bindings.LLKHF_ALTDOWN) != 0
             if (isKeyDown && (modifierHeld || altDownFlag)) {
                 modifierHeld = true
-                val reverse = reverseModifierHeld || isKeyCurrentlyDown(hotkey.reverseModifierPrimaryVk())
+                val reverse = reverseModifierHeld || isKeyCurrentlyDown(hotkey.reverseModifierPrimaryVk)
                 eventChannel.trySend(HookKeyEvent.AltTabPressed(reverse = reverse))
                 return true
             }
@@ -204,7 +195,7 @@ class KeyboardHook(
     }
 
     private fun isKeyCurrentlyDown(vkCode: Int): Boolean {
-        val state = Win32Bindings.GetAsyncKeyState.invokeExact(vkCode) as Short
+        val state = Win32Bindings.Hook.GetAsyncKeyState.invokeExact(vkCode) as Short
         return (state.toInt() and 0x8000) != 0
     }
 
@@ -214,7 +205,7 @@ class KeyboardHook(
         }
         val tid = hookThreadId.get()
         if (tid != 0) {
-            Win32Bindings.PostThreadMessageW.invokeExact(
+            Win32Bindings.Hook.PostThreadMessageW.invokeExact(
                 tid,
                 Win32Bindings.WM_QUIT,
                 0L,
@@ -227,5 +218,20 @@ class KeyboardHook(
 
     private fun interface HookCallback {
         fun invoke(nCode: Int, wParam: Long, lParam: MemorySegment): Long
+    }
+
+    private companion object {
+        val DEFAULT_HOTKEY_CONFIG = HotkeyConfig()
+
+        val HOOK_CALLBACK_HANDLE: MethodHandle = MethodHandles.lookup().findVirtual(
+            HookCallback::class.java,
+            "invoke",
+            MethodType.methodType(
+                Long::class.javaPrimitiveType,
+                Int::class.javaPrimitiveType,
+                Long::class.javaPrimitiveType,
+                MemorySegment::class.java,
+            ),
+        )
     }
 }

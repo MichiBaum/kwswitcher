@@ -4,14 +4,22 @@ import java.lang.foreign.Arena
 import java.lang.foreign.FunctionDescriptor
 import java.lang.foreign.Linker
 import java.lang.foreign.MemoryLayout
+import java.lang.foreign.MemoryLayout.PathElement
 import java.lang.foreign.MemorySegment
 import java.lang.foreign.SymbolLookup
 import java.lang.foreign.ValueLayout
 import java.lang.invoke.MethodHandle
+import java.lang.invoke.MethodHandles
+import java.lang.invoke.VarHandle
 
 /**
  * Project Panama (`java.lang.foreign`) native bindings and struct layouts for Win32 APIs
- * across `user32.dll`, `kernel32.dll`, `dwmapi.dll`, and `gdi32.dll`.
+ * across `user32.dll`, `kernel32.dll`, `dwmapi.dll`, `gdi32.dll`, and `advapi32.dll`.
+ *
+ * Downcall [MethodHandle]s and DLL [SymbolLookup]s are grouped into lazy subsystem holder objects
+ * ([Mutex], [Hook], [Enumeration], [Activator], [Icons], [Registry]) so cold startup and fast-fail
+ * single-instance checks only load and link the native symbols they actually invoke, while HotSpot C2
+ * still constant-folds every `@JvmField` handle.
  */
 object Win32Bindings {
     const val WH_KEYBOARD_LL: Int = 13
@@ -71,15 +79,61 @@ object Win32Bindings {
     const val MONITORINFOF_PRIMARY: Int = 1
     const val DIB_RGB_COLORS: Int = 0
     const val BI_RGB: Int = 0
+    const val ERROR_SUCCESS: Int = 0
+    const val ERROR_FILE_NOT_FOUND: Int = 2
     const val ERROR_ALREADY_EXISTS: Int = 183
+    const val ERROR_MORE_DATA: Int = 234
 
-    val linker: Linker = Linker.nativeLinker()
-    private val globalArena: Arena = Arena.global()
+    const val REG_SZ: Int = 1
+    const val RRF_RT_REG_SZ: Int = 0x00000002
+    val HKEY_CURRENT_USER: Long = 0x80000001.toInt().toLong()
 
-    private val user32: SymbolLookup = SymbolLookup.libraryLookup("user32.dll", globalArena)
-    private val kernel32: SymbolLookup = SymbolLookup.libraryLookup("kernel32.dll", globalArena)
-    private val dwmapi: SymbolLookup = SymbolLookup.libraryLookup("dwmapi.dll", globalArena)
-    private val gdi32: SymbolLookup = SymbolLookup.libraryLookup("gdi32.dll", globalArena)
+    val linker: Linker
+        get() = NativeLinkerHolder.linker
+
+    private object NativeLinkerHolder {
+        @JvmField
+        val linker: Linker = Linker.nativeLinker()
+
+        @JvmField
+        val globalArena: Arena = Arena.global()
+
+        fun downcall(
+            lookup: SymbolLookup,
+            name: String,
+            descriptor: FunctionDescriptor,
+        ): MethodHandle {
+            val symbol: MemorySegment = lookup.find(name).orElseThrow {
+                IllegalStateException("Win32 symbol not found: $name")
+            }
+            return linker.downcallHandle(symbol, descriptor)
+        }
+    }
+
+    private object Kernel32Lib {
+        @JvmField
+        val lookup: SymbolLookup = SymbolLookup.libraryLookup("kernel32.dll", NativeLinkerHolder.globalArena)
+    }
+
+    private object User32Lib {
+        @JvmField
+        val lookup: SymbolLookup = SymbolLookup.libraryLookup("user32.dll", NativeLinkerHolder.globalArena)
+    }
+
+    private object DwmapiLib {
+        @JvmField
+        val lookup: SymbolLookup = SymbolLookup.libraryLookup("dwmapi.dll", NativeLinkerHolder.globalArena)
+    }
+
+    private object Gdi32Lib {
+        @JvmField
+        val lookup: SymbolLookup = SymbolLookup.libraryLookup("gdi32.dll", NativeLinkerHolder.globalArena)
+    }
+
+    private object Advapi32Lib {
+        @JvmField
+        val lookup: SymbolLookup = SymbolLookup.libraryLookup("advapi32.dll", NativeLinkerHolder.globalArena)
+    }
 
     val KBDLLHOOKSTRUCT_LAYOUT: MemoryLayout = MemoryLayout.structLayout(
         ValueLayout.JAVA_INT.withName("vkCode"),
@@ -171,6 +225,94 @@ object Win32Bindings {
         ValueLayout.JAVA_INT.withName("biClrImportant"),
     )
 
+    @JvmField
+    val KBDLL_VK_CODE: VarHandle = structVarHandle(KBDLLHOOKSTRUCT_LAYOUT, PathElement.groupElement("vkCode"))
+
+    @JvmField
+    val KBDLL_FLAGS: VarHandle = structVarHandle(KBDLLHOOKSTRUCT_LAYOUT, PathElement.groupElement("flags"))
+
+    @JvmField
+    val POINT_X: VarHandle = structVarHandle(POINT_LAYOUT, PathElement.groupElement("x"))
+
+    @JvmField
+    val POINT_Y: VarHandle = structVarHandle(POINT_LAYOUT, PathElement.groupElement("y"))
+
+    @JvmField
+    val MONITORINFO_CB_SIZE: VarHandle = structVarHandle(MONITORINFO_LAYOUT, PathElement.groupElement("cbSize"))
+
+    @JvmField
+    val MONITORINFO_WORK_LEFT: VarHandle = structVarHandle(
+        MONITORINFO_LAYOUT,
+        PathElement.groupElement("rcWork"),
+        PathElement.groupElement("left"),
+    )
+
+    @JvmField
+    val MONITORINFO_WORK_TOP: VarHandle = structVarHandle(
+        MONITORINFO_LAYOUT,
+        PathElement.groupElement("rcWork"),
+        PathElement.groupElement("top"),
+    )
+
+    @JvmField
+    val MONITORINFO_WORK_RIGHT: VarHandle = structVarHandle(
+        MONITORINFO_LAYOUT,
+        PathElement.groupElement("rcWork"),
+        PathElement.groupElement("right"),
+    )
+
+    @JvmField
+    val MONITORINFO_WORK_BOTTOM: VarHandle = structVarHandle(
+        MONITORINFO_LAYOUT,
+        PathElement.groupElement("rcWork"),
+        PathElement.groupElement("bottom"),
+    )
+
+    @JvmField
+    val MONITORINFO_DW_FLAGS: VarHandle = structVarHandle(MONITORINFO_LAYOUT, PathElement.groupElement("dwFlags"))
+
+    @JvmField
+    val ICONINFO_HBM_MASK: VarHandle = structVarHandle(ICONINFO_LAYOUT, PathElement.groupElement("hbmMask"))
+
+    @JvmField
+    val ICONINFO_HBM_COLOR: VarHandle = structVarHandle(ICONINFO_LAYOUT, PathElement.groupElement("hbmColor"))
+
+    @JvmField
+    val BITMAP_BM_WIDTH: VarHandle = structVarHandle(BITMAP_LAYOUT, PathElement.groupElement("bmWidth"))
+
+    @JvmField
+    val BITMAP_BM_HEIGHT: VarHandle = structVarHandle(BITMAP_LAYOUT, PathElement.groupElement("bmHeight"))
+
+    @JvmField
+    val BMIH_BI_SIZE: VarHandle = structVarHandle(BITMAPINFOHEADER_LAYOUT, PathElement.groupElement("biSize"))
+
+    @JvmField
+    val BMIH_BI_WIDTH: VarHandle = structVarHandle(BITMAPINFOHEADER_LAYOUT, PathElement.groupElement("biWidth"))
+
+    @JvmField
+    val BMIH_BI_HEIGHT: VarHandle = structVarHandle(BITMAPINFOHEADER_LAYOUT, PathElement.groupElement("biHeight"))
+
+    @JvmField
+    val BMIH_BI_PLANES: VarHandle = structVarHandle(BITMAPINFOHEADER_LAYOUT, PathElement.groupElement("biPlanes"))
+
+    @JvmField
+    val BMIH_BI_BIT_COUNT: VarHandle = structVarHandle(BITMAPINFOHEADER_LAYOUT, PathElement.groupElement("biBitCount"))
+
+    @JvmField
+    val BMIH_BI_COMPRESSION: VarHandle = structVarHandle(
+        BITMAPINFOHEADER_LAYOUT,
+        PathElement.groupElement("biCompression"),
+    )
+
+    @JvmField
+    val INPUT_ARR_TYPE: VarHandle = structArrayVarHandle(INPUT_LAYOUT, PathElement.groupElement("type"))
+
+    @JvmField
+    val INPUT_ARR_W_VK: VarHandle = structArrayVarHandle(INPUT_LAYOUT, PathElement.groupElement("wVk"))
+
+    @JvmField
+    val INPUT_ARR_DW_FLAGS: VarHandle = structArrayVarHandle(INPUT_LAYOUT, PathElement.groupElement("dwFlags"))
+
     val ENUM_WINDOWS_PROC_DESC: FunctionDescriptor = FunctionDescriptor.of(
         ValueLayout.JAVA_INT,
         ValueLayout.ADDRESS,
@@ -184,474 +326,650 @@ object Win32Bindings {
         ValueLayout.ADDRESS,
     )
 
-    val EnumWindows: MethodHandle = downcall(
-        lookup = user32,
-        name = "EnumWindows",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_LONG,
-        ),
-    )
+    /**
+     * Minimal `kernel32.dll` bindings required for single-instance enforcement prior to full app bootstrap.
+     */
+    object Mutex {
+        @JvmField
+        val CreateMutexW: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = Kernel32Lib.lookup,
+            name = "CreateMutexW",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+            ),
+        )
 
-    val IsWindowVisible: MethodHandle = downcall(
-        lookup = user32,
-        name = "IsWindowVisible",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-        ),
-    )
+        @JvmField
+        val ReleaseMutex: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = Kernel32Lib.lookup,
+            name = "ReleaseMutex",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+            ),
+        )
 
-    val IsIconic: MethodHandle = downcall(
-        lookup = user32,
-        name = "IsIconic",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-        ),
-    )
+        @JvmField
+        val GetLastError: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = Kernel32Lib.lookup,
+            name = "GetLastError",
+            descriptor = FunctionDescriptor.of(ValueLayout.JAVA_INT),
+        )
 
-    val GetWindowTextLengthW: MethodHandle = downcall(
-        lookup = user32,
-        name = "GetWindowTextLengthW",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val GetWindowTextW: MethodHandle = downcall(
-        lookup = user32,
-        name = "GetWindowTextW",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_INT,
-        ),
-    )
-
-    val GetWindowLongPtrW: MethodHandle = downcall(
-        lookup = user32,
-        name = "GetWindowLongPtrW",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_LONG,
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_INT,
-        ),
-    )
-
-    val GetWindowThreadProcessId: MethodHandle = downcall(
-        lookup = user32,
-        name = "GetWindowThreadProcessId",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val GetForegroundWindow: MethodHandle = downcall(
-        lookup = user32,
-        name = "GetForegroundWindow",
-        descriptor = FunctionDescriptor.of(ValueLayout.ADDRESS),
-    )
-
-    val SetForegroundWindow: MethodHandle = downcall(
-        lookup = user32,
-        name = "SetForegroundWindow",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val BringWindowToTop: MethodHandle = downcall(
-        lookup = user32,
-        name = "BringWindowToTop",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val ShowWindow: MethodHandle = downcall(
-        lookup = user32,
-        name = "ShowWindow",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_INT,
-        ),
-    )
-
-    val AttachThreadInput: MethodHandle = downcall(
-        lookup = user32,
-        name = "AttachThreadInput",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.JAVA_INT,
-            ValueLayout.JAVA_INT,
-            ValueLayout.JAVA_INT,
-        ),
-    )
-
-    val SendInput: MethodHandle = downcall(
-        lookup = user32,
-        name = "SendInput",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_INT,
-        ),
-    )
-
-    val SetWindowsHookExW: MethodHandle = downcall(
-        lookup = user32,
-        name = "SetWindowsHookExW",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_INT,
-        ),
-    )
-
-    val CallNextHookEx: MethodHandle = downcall(
-        lookup = user32,
-        name = "CallNextHookEx",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_LONG,
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_INT,
-            ValueLayout.JAVA_LONG,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val UnhookWindowsHookEx: MethodHandle = downcall(
-        lookup = user32,
-        name = "UnhookWindowsHookEx",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val GetMessageW: MethodHandle = downcall(
-        lookup = user32,
-        name = "GetMessageW",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_INT,
-            ValueLayout.JAVA_INT,
-        ),
-    )
-
-    val TranslateMessage: MethodHandle = downcall(
-        lookup = user32,
-        name = "TranslateMessage",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val DispatchMessageW: MethodHandle = downcall(
-        lookup = user32,
-        name = "DispatchMessageW",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_LONG,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val PostThreadMessageW: MethodHandle = downcall(
-        lookup = user32,
-        name = "PostThreadMessageW",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.JAVA_INT,
-            ValueLayout.JAVA_INT,
-            ValueLayout.JAVA_LONG,
-            ValueLayout.JAVA_LONG,
-        ),
-    )
-
-    val GetAsyncKeyState: MethodHandle = downcall(
-        lookup = user32,
-        name = "GetAsyncKeyState",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_SHORT,
-            ValueLayout.JAVA_INT,
-        ),
-    )
-
-    val DwmGetWindowAttribute: MethodHandle = downcall(
-        lookup = dwmapi,
-        name = "DwmGetWindowAttribute",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_INT,
-        ),
-    )
-
-    val OpenProcess: MethodHandle = downcall(
-        lookup = kernel32,
-        name = "OpenProcess",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_INT,
-            ValueLayout.JAVA_INT,
-            ValueLayout.JAVA_INT,
-        ),
-    )
-
-    val QueryFullProcessImageNameW: MethodHandle = downcall(
-        lookup = kernel32,
-        name = "QueryFullProcessImageNameW",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val CloseHandle: MethodHandle = downcall(
-        lookup = kernel32,
-        name = "CloseHandle",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val GetCurrentThreadId: MethodHandle = downcall(
-        lookup = kernel32,
-        name = "GetCurrentThreadId",
-        descriptor = FunctionDescriptor.of(ValueLayout.JAVA_INT),
-    )
-
-    val GetModuleHandleW: MethodHandle = downcall(
-        lookup = kernel32,
-        name = "GetModuleHandleW",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.ADDRESS,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val IsWindowEnabled: MethodHandle = downcall(
-        lookup = user32,
-        name = "IsWindowEnabled",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val PostMessageW: MethodHandle = downcall(
-        lookup = user32,
-        name = "PostMessageW",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_INT,
-            ValueLayout.JAVA_LONG,
-            ValueLayout.JAVA_LONG,
-        ),
-    )
-
-    val SendMessageTimeoutW: MethodHandle = downcall(
-        lookup = user32,
-        name = "SendMessageTimeoutW",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_LONG,
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_INT,
-            ValueLayout.JAVA_LONG,
-            ValueLayout.JAVA_LONG,
-            ValueLayout.JAVA_INT,
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val GetClassLongPtrW: MethodHandle = downcall(
-        lookup = user32,
-        name = "GetClassLongPtrW",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_LONG,
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_INT,
-        ),
-    )
-
-    val GetIconInfo: MethodHandle = downcall(
-        lookup = user32,
-        name = "GetIconInfo",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val DestroyIcon: MethodHandle = downcall(
-        lookup = user32,
-        name = "DestroyIcon",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val MonitorFromWindow: MethodHandle = downcall(
-        lookup = user32,
-        name = "MonitorFromWindow",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.ADDRESS,
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_INT,
-        ),
-    )
-
-    val MonitorFromPoint: MethodHandle = downcall(
-        lookup = user32,
-        name = "MonitorFromPoint",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_LONG,
-            ValueLayout.JAVA_INT,
-        ),
-    )
-
-    val GetMonitorInfoW: MethodHandle = downcall(
-        lookup = user32,
-        name = "GetMonitorInfoW",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val GetCursorPos: MethodHandle = downcall(
-        lookup = user32,
-        name = "GetCursorPos",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val CreateCompatibleDC: MethodHandle = downcall(
-        lookup = gdi32,
-        name = "CreateCompatibleDC",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.ADDRESS,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val DeleteDC: MethodHandle = downcall(
-        lookup = gdi32,
-        name = "DeleteDC",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val DeleteObject: MethodHandle = downcall(
-        lookup = gdi32,
-        name = "DeleteObject",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val GetObjectW: MethodHandle = downcall(
-        lookup = gdi32,
-        name = "GetObjectW",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val GetDIBits: MethodHandle = downcall(
-        lookup = gdi32,
-        name = "GetDIBits",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_INT,
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_INT,
-        ),
-    )
-
-    val TerminateProcess: MethodHandle = downcall(
-        lookup = kernel32,
-        name = "TerminateProcess",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_INT,
-        ),
-    )
-
-    val CreateMutexW: MethodHandle = downcall(
-        lookup = kernel32,
-        name = "CreateMutexW",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.ADDRESS,
-            ValueLayout.ADDRESS,
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val ReleaseMutex: MethodHandle = downcall(
-        lookup = kernel32,
-        name = "ReleaseMutex",
-        descriptor = FunctionDescriptor.of(
-            ValueLayout.JAVA_INT,
-            ValueLayout.ADDRESS,
-        ),
-    )
-
-    val GetLastError: MethodHandle = downcall(
-        lookup = kernel32,
-        name = "GetLastError",
-        descriptor = FunctionDescriptor.of(ValueLayout.JAVA_INT),
-    )
-
-    private fun downcall(
-        lookup: SymbolLookup,
-        name: String,
-        descriptor: FunctionDescriptor,
-    ): MethodHandle {
-        val symbol: MemorySegment = lookup.find(name).orElseThrow {
-            IllegalStateException("Win32 symbol not found: $name")
-        }
-        return linker.downcallHandle(symbol, descriptor)
+        @JvmField
+        val CloseHandle: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = Kernel32Lib.lookup,
+            name = "CloseHandle",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+            ),
+        )
     }
+
+    /**
+     * Low-level keyboard hook and Win32 message-loop bindings (`user32.dll` + `kernel32.dll`).
+     */
+    object Hook {
+        @JvmField
+        val SetWindowsHookExW: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "SetWindowsHookExW",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+            ),
+        )
+
+        @JvmField
+        val CallNextHookEx: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "CallNextHookEx",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_LONG,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_LONG,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val UnhookWindowsHookEx: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "UnhookWindowsHookEx",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val GetMessageW: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "GetMessageW",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_INT,
+            ),
+        )
+
+        @JvmField
+        val TranslateMessage: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "TranslateMessage",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val DispatchMessageW: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "DispatchMessageW",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_LONG,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val PostThreadMessageW: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "PostThreadMessageW",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_LONG,
+                ValueLayout.JAVA_LONG,
+            ),
+        )
+
+        @JvmField
+        val GetAsyncKeyState: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "GetAsyncKeyState",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_SHORT,
+                ValueLayout.JAVA_INT,
+            ),
+        )
+
+        @JvmField
+        val GetCurrentThreadId: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = Kernel32Lib.lookup,
+            name = "GetCurrentThreadId",
+            descriptor = FunctionDescriptor.of(ValueLayout.JAVA_INT),
+        )
+
+        @JvmField
+        val GetModuleHandleW: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = Kernel32Lib.lookup,
+            name = "GetModuleHandleW",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+            ),
+        )
+    }
+
+    /**
+     * Window, process, DWM cloaking, and monitor enumeration bindings (`user32.dll`, `dwmapi.dll`, `kernel32.dll`).
+     */
+    object Enumeration {
+        @JvmField
+        val EnumWindows: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "EnumWindows",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_LONG,
+            ),
+        )
+
+        @JvmField
+        val IsWindowVisible: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "IsWindowVisible",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val IsWindowEnabled: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "IsWindowEnabled",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val IsIconic: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "IsIconic",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val GetWindowTextLengthW: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "GetWindowTextLengthW",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val GetWindowTextW: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "GetWindowTextW",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+            ),
+        )
+
+        @JvmField
+        val GetWindowLongPtrW: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "GetWindowLongPtrW",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_LONG,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+            ),
+        )
+
+        @JvmField
+        val GetWindowThreadProcessId: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "GetWindowThreadProcessId",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val GetForegroundWindow: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "GetForegroundWindow",
+            descriptor = FunctionDescriptor.of(ValueLayout.ADDRESS),
+        )
+
+        @JvmField
+        val DwmGetWindowAttribute: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = DwmapiLib.lookup,
+            name = "DwmGetWindowAttribute",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+            ),
+        )
+
+        @JvmField
+        val OpenProcess: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = Kernel32Lib.lookup,
+            name = "OpenProcess",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_INT,
+            ),
+        )
+
+        @JvmField
+        val QueryFullProcessImageNameW: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = Kernel32Lib.lookup,
+            name = "QueryFullProcessImageNameW",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val MonitorFromWindow: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "MonitorFromWindow",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+            ),
+        )
+
+        @JvmField
+        val MonitorFromPoint: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "MonitorFromPoint",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_LONG,
+                ValueLayout.JAVA_INT,
+            ),
+        )
+
+        @JvmField
+        val GetMonitorInfoW: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "GetMonitorInfoW",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val GetCursorPos: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "GetCursorPos",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+            ),
+        )
+    }
+
+    /**
+     * Window activation, restore/minimize, graceful close, and process termination bindings.
+     */
+    object Activator {
+        @JvmField
+        val SetForegroundWindow: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "SetForegroundWindow",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val BringWindowToTop: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "BringWindowToTop",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val ShowWindow: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "ShowWindow",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+            ),
+        )
+
+        @JvmField
+        val AttachThreadInput: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "AttachThreadInput",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_INT,
+            ),
+        )
+
+        @JvmField
+        val SendInput: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "SendInput",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+            ),
+        )
+
+        @JvmField
+        val PostMessageW: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "PostMessageW",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_LONG,
+                ValueLayout.JAVA_LONG,
+            ),
+        )
+
+        @JvmField
+        val TerminateProcess: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = Kernel32Lib.lookup,
+            name = "TerminateProcess",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+            ),
+        )
+    }
+
+    /**
+     * Icon query and GDI bitmap conversion bindings (`user32.dll` + `gdi32.dll`), linked lazily off the startup path.
+     */
+    object Icons {
+        @JvmField
+        val SendMessageTimeoutW: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "SendMessageTimeoutW",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_LONG,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_LONG,
+                ValueLayout.JAVA_LONG,
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val GetClassLongPtrW: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "GetClassLongPtrW",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_LONG,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+            ),
+        )
+
+        @JvmField
+        val GetIconInfo: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "GetIconInfo",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val DestroyIcon: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "DestroyIcon",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val CreateCompatibleDC: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = Gdi32Lib.lookup,
+            name = "CreateCompatibleDC",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val DeleteDC: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = Gdi32Lib.lookup,
+            name = "DeleteDC",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val DeleteObject: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = Gdi32Lib.lookup,
+            name = "DeleteObject",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val GetObjectW: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = Gdi32Lib.lookup,
+            name = "GetObjectW",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val GetDIBits: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = Gdi32Lib.lookup,
+            name = "GetDIBits",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+            ),
+        )
+    }
+
+    /**
+     * Windows Registry (`advapi32.dll`) bindings for querying and toggling `HKCU\...\Run` without spawning `reg.exe`.
+     */
+    object Registry {
+        @JvmField
+        val RegGetValueW: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = Advapi32Lib.lookup,
+            name = "RegGetValueW",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val RegSetKeyValueW: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = Advapi32Lib.lookup,
+            name = "RegSetKeyValueW",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+            ),
+        )
+
+        @JvmField
+        val RegDeleteKeyValueW: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = Advapi32Lib.lookup,
+            name = "RegDeleteKeyValueW",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val RegDeleteKeyW: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = Advapi32Lib.lookup,
+            name = "RegDeleteKeyW",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+            ),
+        )
+    }
+
+    val EnumWindows: MethodHandle get() = Enumeration.EnumWindows
+    val IsWindowVisible: MethodHandle get() = Enumeration.IsWindowVisible
+    val IsIconic: MethodHandle get() = Enumeration.IsIconic
+    val GetWindowTextLengthW: MethodHandle get() = Enumeration.GetWindowTextLengthW
+    val GetWindowTextW: MethodHandle get() = Enumeration.GetWindowTextW
+    val GetWindowLongPtrW: MethodHandle get() = Enumeration.GetWindowLongPtrW
+    val GetWindowThreadProcessId: MethodHandle get() = Enumeration.GetWindowThreadProcessId
+    val GetForegroundWindow: MethodHandle get() = Enumeration.GetForegroundWindow
+    val SetForegroundWindow: MethodHandle get() = Activator.SetForegroundWindow
+    val BringWindowToTop: MethodHandle get() = Activator.BringWindowToTop
+    val ShowWindow: MethodHandle get() = Activator.ShowWindow
+    val AttachThreadInput: MethodHandle get() = Activator.AttachThreadInput
+    val SendInput: MethodHandle get() = Activator.SendInput
+    val SetWindowsHookExW: MethodHandle get() = Hook.SetWindowsHookExW
+    val CallNextHookEx: MethodHandle get() = Hook.CallNextHookEx
+    val UnhookWindowsHookEx: MethodHandle get() = Hook.UnhookWindowsHookEx
+    val GetMessageW: MethodHandle get() = Hook.GetMessageW
+    val TranslateMessage: MethodHandle get() = Hook.TranslateMessage
+    val DispatchMessageW: MethodHandle get() = Hook.DispatchMessageW
+    val PostThreadMessageW: MethodHandle get() = Hook.PostThreadMessageW
+    val GetAsyncKeyState: MethodHandle get() = Hook.GetAsyncKeyState
+    val DwmGetWindowAttribute: MethodHandle get() = Enumeration.DwmGetWindowAttribute
+    val OpenProcess: MethodHandle get() = Enumeration.OpenProcess
+    val QueryFullProcessImageNameW: MethodHandle get() = Enumeration.QueryFullProcessImageNameW
+    val CloseHandle: MethodHandle get() = Mutex.CloseHandle
+    val GetCurrentThreadId: MethodHandle get() = Hook.GetCurrentThreadId
+    val GetModuleHandleW: MethodHandle get() = Hook.GetModuleHandleW
+    val IsWindowEnabled: MethodHandle get() = Enumeration.IsWindowEnabled
+    val PostMessageW: MethodHandle get() = Activator.PostMessageW
+    val SendMessageTimeoutW: MethodHandle get() = Icons.SendMessageTimeoutW
+    val GetClassLongPtrW: MethodHandle get() = Icons.GetClassLongPtrW
+    val GetIconInfo: MethodHandle get() = Icons.GetIconInfo
+    val DestroyIcon: MethodHandle get() = Icons.DestroyIcon
+    val MonitorFromWindow: MethodHandle get() = Enumeration.MonitorFromWindow
+    val MonitorFromPoint: MethodHandle get() = Enumeration.MonitorFromPoint
+    val GetMonitorInfoW: MethodHandle get() = Enumeration.GetMonitorInfoW
+    val GetCursorPos: MethodHandle get() = Enumeration.GetCursorPos
+    val CreateCompatibleDC: MethodHandle get() = Icons.CreateCompatibleDC
+    val DeleteDC: MethodHandle get() = Icons.DeleteDC
+    val DeleteObject: MethodHandle get() = Icons.DeleteObject
+    val GetObjectW: MethodHandle get() = Icons.GetObjectW
+    val GetDIBits: MethodHandle get() = Icons.GetDIBits
+    val TerminateProcess: MethodHandle get() = Activator.TerminateProcess
+    val CreateMutexW: MethodHandle get() = Mutex.CreateMutexW
+    val ReleaseMutex: MethodHandle get() = Mutex.ReleaseMutex
+    val GetLastError: MethodHandle get() = Mutex.GetLastError
+
+    private fun structVarHandle(
+        layout: MemoryLayout,
+        vararg elements: PathElement,
+    ): VarHandle = MethodHandles.insertCoordinates(layout.varHandle(*elements), 1, 0L)
+
+    private fun structArrayVarHandle(
+        layout: MemoryLayout,
+        vararg elements: PathElement,
+    ): VarHandle = MethodHandles.insertCoordinates(layout.arrayElementVarHandle(*elements), 1, 0L)
 }

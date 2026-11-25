@@ -5,6 +5,7 @@ import com.formdev.flatlaf.FlatLaf
 import com.formdev.flatlaf.FlatLightLaf
 import java.awt.Color
 import java.awt.Toolkit
+import javax.swing.UIManager
 
 /**
  * Color palette used by the switcher overlay and list cell renderer for Dark and Light themes.
@@ -29,6 +30,8 @@ data class ThemePalette(
     val minimizedBadgeForeground: Color,
     val killArmedBackground: Color,
     val killArmedForeground: Color,
+    val highlightColor: Color = Color.decode(highlightHex),
+    val highlightSelectedColor: Color = Color.decode(highlightSelectedHex),
 )
 
 /**
@@ -56,6 +59,8 @@ object ThemeManager {
         minimizedBadgeForeground = Color(0xE5, 0xC0, 0x7B),
         killArmedBackground = Color(0x8B, 0x26, 0x26),
         killArmedForeground = Color(0xFF, 0xE0, 0xE0),
+        highlightColor = Color(0x61, 0xAF, 0xEF),
+        highlightSelectedColor = Color(0xFF, 0xD8, 0x66),
     )
 
     val LIGHT_PALETTE = ThemePalette(
@@ -78,6 +83,8 @@ object ThemeManager {
         minimizedBadgeForeground = Color(0x85, 0x64, 0x04),
         killArmedBackground = Color(0xC9, 0x2A, 0x2A),
         killArmedForeground = Color.WHITE,
+        highlightColor = Color(0x00, 0x5C, 0xC5),
+        highlightSelectedColor = Color(0xFF, 0xE5, 0x8F),
     )
 
     /**
@@ -94,15 +101,22 @@ object ThemeManager {
 
     /**
      * Installs the FlatLaf theme matching [option] and returns its [ThemePalette].
+     * When [updateExistingComponents] is `false` (cold startup before any Swing windows exist),
+     * skips `FlatLaf.updateUI()` to avoid redundant UI tree/defaults work.
      */
-    fun applyTheme(option: ThemeOption): ThemePalette {
+    fun applyTheme(option: ThemeOption, updateExistingComponents: Boolean = true): ThemePalette {
         val palette = resolvePalette(option)
-        if (palette.isDark) {
-            FlatDarkLaf.setup()
-        } else {
-            FlatLightLaf.setup()
+        val targetLafClass = if (palette.isDark) FlatDarkLaf::class.java else FlatLightLaf::class.java
+        if (UIManager.getLookAndFeel()?.javaClass != targetLafClass) {
+            if (palette.isDark) {
+                FlatDarkLaf.setup()
+            } else {
+                FlatLightLaf.setup()
+            }
+            if (updateExistingComponents) {
+                FlatLaf.updateUI()
+            }
         }
-        FlatLaf.updateUI()
         return palette
     }
 

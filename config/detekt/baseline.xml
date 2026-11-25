@@ -1,0 +1,92 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>ComplexCondition:IconExtractor.kt:IconExtractor$width &lt;= 0 || height &lt;= 0 || width &gt; 256 || height &gt; 256</ID>
+    <ID>CyclomaticComplexMethod:IconExtractor.kt:IconExtractor$private fun convertHIconToImage: BufferedImage?</ID>
+    <ID>CyclomaticComplexMethod:KeyboardHook.kt:KeyboardHook$internal fun processKeyMessage: Boolean</ID>
+    <ID>CyclomaticComplexMethod:WindowFilter.kt:WindowFilter$private fun findFuzzySubsequence: TokenMatch?</ID>
+    <ID>LongMethod:IconExtractor.kt:IconExtractor$private fun convertHIconToImage: BufferedImage?</ID>
+    <ID>LongMethod:Main.kt:@OptIn(ExperimentalCoroutinesApi::class) fun main</ID>
+    <ID>LongMethod:SwitcherOverlay.kt:SwitcherOverlay.&lt;no name provided&gt;$override fun keyPressed</ID>
+    <ID>LongMethod:Win32EngineTest.kt:Win32EngineTest$@OptIn(ExperimentalCoroutinesApi::class) @Test fun `IconExtractor getIconOrDefault deduplicates concurrent misses, caches fallback on failure, and dispatches UI callbacks`</ID>
+    <ID>LongMethod:Win32EngineTest.kt:Win32EngineTest$@Test fun `IconExtractor clearCache discards stale in-flight writes and close cancels active jobs`</ID>
+    <ID>LongMethod:Win32EngineTest.kt:Win32EngineTest$@Test fun `KeyboardHook state machine swallows trigger key when configured modifier is depressed`</ID>
+    <ID>LongMethod:Win32EngineTest.kt:Win32EngineTest$@Test fun `Panama VarHandles read and write exact 64-bit Windows ABI byte offsets`</ID>
+    <ID>LongMethod:WindowListCellRenderer.kt:WindowListCellRenderer$override fun getListCellRendererComponent: Component</ID>
+    <ID>LongMethod:WindowListCellRenderer.kt:WindowListCellRenderer.Companion$internal fun layoutHighlightedText: HighlightedTextLayout</ID>
+    <ID>LongMethod:WindowListCellRenderer.kt:WindowListCellRenderer.HighlightLabel$override fun paintComponent</ID>
+    <ID>LongMethod:WindowListCellRendererTest.kt:WindowListCellRendererTest$@Test fun `renderer constrains long title width truncates on layout caches bold font and paints without BasicHTML`</ID>
+    <ID>MagicNumber:IconExtractor.kt:IconExtractor$0x00FFFFFF</ID>
+    <ID>MagicNumber:IconExtractor.kt:IconExtractor$0xFF</ID>
+    <ID>MagicNumber:IconExtractor.kt:IconExtractor$24</ID>
+    <ID>MagicNumber:IconExtractor.kt:IconExtractor$256</ID>
+    <ID>MagicNumber:IconExtractor.kt:IconExtractor$4</ID>
+    <ID>MagicNumber:IconExtractor.kt:IconExtractor.Companion$0x3B</ID>
+    <ID>MagicNumber:IconExtractor.kt:IconExtractor.Companion$0x82</ID>
+    <ID>MagicNumber:IconExtractor.kt:IconExtractor.Companion$0xDB</ID>
+    <ID>MagicNumber:IconExtractor.kt:IconExtractor.Companion$0xEA</ID>
+    <ID>MagicNumber:IconExtractor.kt:IconExtractor.Companion$0xF6</ID>
+    <ID>MagicNumber:IconExtractor.kt:IconExtractor.Companion$0xFE</ID>
+    <ID>MagicNumber:IconExtractor.kt:IconExtractor.Companion$1.5f</ID>
+    <ID>MagicNumber:IconExtractor.kt:IconExtractor.Companion$4</ID>
+    <ID>MagicNumber:IconExtractor.kt:IconExtractor.Companion$5</ID>
+    <ID>MagicNumber:IconExtractor.kt:IconExtractor.Companion$6</ID>
+    <ID>MagicNumber:KeyboardHook.kt:KeyboardHook$0x8000</ID>
+    <ID>MagicNumber:KeyboardHook.kt:KeyboardHook$1_000</ID>
+    <ID>MagicNumber:KeyboardHook.kt:KeyboardHook$3</ID>
+    <ID>MagicNumber:SwitcherOverlay.kt:SwitcherOverlay$10</ID>
+    <ID>MagicNumber:SwitcherOverlay.kt:SwitcherOverlay$12</ID>
+    <ID>MagicNumber:SystemTrayController.kt:SystemTrayController$0x25</ID>
+    <ID>MagicNumber:SystemTrayController.kt:SystemTrayController$0x63</ID>
+    <ID>MagicNumber:SystemTrayController.kt:SystemTrayController$0xEB</ID>
+    <ID>MagicNumber:SystemTrayController.kt:SystemTrayController$1.6f</ID>
+    <ID>MagicNumber:SystemTrayController.kt:SystemTrayController$10</ID>
+    <ID>MagicNumber:SystemTrayController.kt:SystemTrayController$11</ID>
+    <ID>MagicNumber:SystemTrayController.kt:SystemTrayController$12</ID>
+    <ID>MagicNumber:SystemTrayController.kt:SystemTrayController$4</ID>
+    <ID>MagicNumber:SystemTrayController.kt:SystemTrayController$6</ID>
+    <ID>MagicNumber:SystemTrayController.kt:SystemTrayController$8</ID>
+    <ID>MagicNumber:SystemTrayController.kt:SystemTrayController$9</ID>
+    <ID>MagicNumber:WindowEnumerator.kt:WindowEnumerator.Companion$0xFFFF_FFFFL</ID>
+    <ID>MagicNumber:WindowEnumerator.kt:WindowEnumerator.Companion$32</ID>
+    <ID>MagicNumber:WindowFilter.kt:WindowFilter$40</ID>
+    <ID>MagicNumber:WindowFilter.kt:WindowFilter$400</ID>
+    <ID>MagicNumber:WindowListCellRenderer.kt:WindowListCellRenderer$11</ID>
+    <ID>MagicNumber:WindowListCellRenderer.kt:WindowListCellRenderer$8</ID>
+    <ID>MaxLineLength:IconExtractor.kt:IconExtractor$val nextHeight = if (currentHeight &gt; target * 2) (currentHeight / 2).coerceAtLeast(target) else currentHeight</ID>
+    <ID>MaxLineLength:SwitcherConfig.kt:HotkeyConfig.Companion$"CTRL", "CONTROL" -&gt; intArrayOf(Win32Bindings.VK_CONTROL, Win32Bindings.VK_LCONTROL, Win32Bindings.VK_RCONTROL)</ID>
+    <ID>MaxLineLength:Win32EngineTest.kt:Win32EngineTest$assertEquals("idea64", enumerator.extractProcessName("C:\\Program Files\\JetBrains\\IntelliJ IDEA\\bin\\idea64.exe"))</ID>
+    <ID>MaxLineLength:Win32EngineTest.kt:Win32EngineTest$fun</ID>
+    <ID>MaxLineLength:WindowFilterTest.kt:WindowFilterTest$// Exact prefix on title/process ("PowerToys") ranks above word-boundary ("Windows PowerShell" / "My Power Document")</ID>
+    <ID>MaxLineLength:WindowListCellRenderer.kt:WindowListCellRenderer$monitorBadge.background = if (isSelected) currentPalette.badgeSelectedBackground else currentPalette.badgeBackground</ID>
+    <ID>MaxLineLength:WindowListCellRenderer.kt:WindowListCellRenderer$monitorBadge.foreground = if (isSelected) currentPalette.badgeSelectedForeground else currentPalette.badgeForeground</ID>
+    <ID>MaxLineLength:WindowListCellRendererTest.kt:WindowListCellRendererTest$val longTitle = "kwswitcher - WindowListCellRenderer.kt - VeryLongProjectDescriptionThatOverflowsTheOverlayWidth - IntelliJ IDEA"</ID>
+    <ID>ReturnCount:IconExtractor.kt:IconExtractor$fun getIconOrDefault: Icon</ID>
+    <ID>ReturnCount:IconExtractor.kt:IconExtractor$internal fun extractFromHwnd: Icon?</ID>
+    <ID>ReturnCount:IconExtractor.kt:IconExtractor$internal fun scaleImage: BufferedImage</ID>
+    <ID>ReturnCount:IconExtractor.kt:IconExtractor$private fun convertHIconToImage: BufferedImage?</ID>
+    <ID>ReturnCount:IconExtractor.kt:IconExtractor$private fun extractFromFileSystem: Icon?</ID>
+    <ID>ReturnCount:IconExtractor.kt:IconExtractor$private fun queryWindowIconHandle: Long</ID>
+    <ID>ReturnCount:KeyboardHook.kt:KeyboardHook$internal fun processKeyMessage: Boolean</ID>
+    <ID>ReturnCount:SingleInstanceMutex.kt:SingleInstanceMutex$fun tryAcquire: Boolean</ID>
+    <ID>ReturnCount:SwitcherStateMachine.kt:SwitcherStateMachine$fun onCloseSelectedWindow: SwitcherActionResult</ID>
+    <ID>ReturnCount:SwitcherStateMachine.kt:SwitcherStateMachine$fun onKillSelectedWindowProcess: SwitcherActionResult</ID>
+    <ID>ReturnCount:SwitcherStateMachine.kt:SwitcherStateMachine$fun onMinimizeSelectedWindow: SwitcherActionResult</ID>
+    <ID>ReturnCount:WindowActivator.kt:WindowActivator$fun terminateProcess: Boolean</ID>
+    <ID>ReturnCount:WindowEnumerator.kt:WindowEnumerator$fun getActiveMonitorWorkArea: Rectangle?</ID>
+    <ID>ReturnCount:WindowEnumerator.kt:WindowEnumerator$private fun inspectWindow: RawWindowEntry?</ID>
+    <ID>ReturnCount:WindowEnumerator.kt:WindowEnumerator$private fun isPrimaryMonitor: Boolean</ID>
+    <ID>ReturnCount:WindowEnumerator.kt:WindowEnumerator$private fun readWindowTitle: String</ID>
+    <ID>ReturnCount:WindowEnumerator.kt:WindowEnumerator.Companion$internal fun queryProcessImagePath: String</ID>
+    <ID>ReturnCount:WindowFilter.kt:WindowFilter$fun match: List&lt;WindowMatch&gt;</ID>
+    <ID>ReturnCount:WindowFilter.kt:WindowFilter$internal fun matchTokenInText: TokenMatch?</ID>
+    <ID>ReturnCount:WindowFilter.kt:WindowFilter$private fun findAcronymMatch: IntArray?</ID>
+    <ID>ReturnCount:WindowFilter.kt:WindowFilter$private fun findFuzzySubsequence: TokenMatch?</ID>
+    <ID>ReturnCount:WindowFilter.kt:WindowFilter$private fun isWordBoundary: Boolean</ID>
+    <ID>ReturnCount:WindowListCellRenderer.kt:WindowListCellRenderer.Companion$internal fun layoutHighlightedText: HighlightedTextLayout</ID>
+    <ID>ReturnCount:WindowListCellRenderer.kt:WindowListCellRenderer.TruncatingHighlightLabel$override fun computeCurrentLayout: HighlightedTextLayout</ID>
+    <ID>TooManyFunctions:IconExtractor.kt:IconExtractor : AutoCloseable</ID>
+    <ID>TooManyFunctions:SwitcherStateMachine.kt:SwitcherStateMachine</ID>
+  </CurrentIssues>
+</SmellBaseline>
