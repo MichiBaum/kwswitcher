@@ -55,7 +55,7 @@ jobs:
 
       - name: Set project version
         shell: pwsh
-        run: .\mvnw.cmd -B versions:set "-DnewVersion=${{ steps.version.outputs.version }}" -DgenerateBackupPoms=false
+        run: .\mvnw.cmd -B versions:set "-DnewVersion=${{ steps.version.outputs.version }}" "-DgenerateBackupPoms=false"
 
       - name: Run tests, Kover coverage, and Detekt verification
         shell: pwsh
@@ -103,7 +103,7 @@ jobs:
 
       - name: Build chained native app-image and MSI installer
         shell: pwsh
-        run: .\mvnw.cmd -B package -Pjpackage-installer -DskipTests -Ddetekt.skip=true
+        run: .\mvnw.cmd -B package -Pjpackage-installer "-DskipTests" "-Ddetekt.skip=true"
 
       - name: Verify and zip native app-image and MSI artifacts
         id: artifacts
