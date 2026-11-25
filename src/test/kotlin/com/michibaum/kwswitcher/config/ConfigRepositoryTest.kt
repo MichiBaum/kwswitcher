@@ -90,15 +90,13 @@ class ConfigRepositoryTest {
     }
 
     @Test
-    fun `WindowListCellRenderer formats HTML match highlights and escapes special characters`() {
-        val highlighted = WindowListCellRenderer.formatHighlightedText(
+    fun `WindowListCellRenderer lays out match highlight spans directly without HTML escaping`() {
+        val layout = WindowListCellRenderer.layoutHighlightedText(
             text = "Kotlin & <Java>",
             ranges = listOf(0..2, 10..13),
-            highlightHex = "#61AFEF",
         )
-        assertEquals(
-            "<html><nobr><b><font color=\"#61AFEF\">Kot</font></b>lin &amp; &lt;<b><font color=\"#61AFEF\">Java</font></b>&gt;</nobr></html>",
-            highlighted,
-        )
+        assertEquals("Kotlin & <Java>", layout.displayText)
+        assertEquals(listOf(0..2, 10..13), layout.highlightRanges)
+        assertFalse(layout.truncated)
     }
 }

@@ -21,8 +21,8 @@ import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
+import javax.swing.AbstractListModel
 import javax.swing.BorderFactory
-import javax.swing.DefaultListModel
 import javax.swing.JDialog
 import javax.swing.JList
 import javax.swing.JPanel
@@ -45,7 +45,7 @@ class SwitcherOverlay(
     initialConfig: SwitcherConfig = SwitcherConfig(),
     initialPalette: ThemePalette = ThemeManager.DARK_PALETTE,
 ) {
-    private val listModel = DefaultListModel<WindowMatch>()
+    internal val listModel = WindowMatchListModel()
     private var suppressDocumentEvents = false
     private val renderer = WindowListCellRenderer(iconExtractor = iconExtractor).apply {
         config = initialConfig
@@ -157,12 +157,17 @@ class SwitcherOverlay(
             }
         }
 
+        val badgeStateChanged = renderer.armedKillHwnd != state.armedKillHwnd ||
+            renderer.multiMonitorDetected != state.multiMonitorDetected
         renderer.armedKillHwnd = state.armedKillHwnd
         renderer.multiMonitorDetected = state.multiMonitorDetected
         updateListItems(state.matches, state.selectedIndex)
+        if (badgeStateChanged) {
+            windowList.repaint()
+        }
 
         if (!dialog.isVisible) {
-            positionOnActiveMonitor()
+            positionOnActiveMonitor(state.activeMonitorWorkArea)
             dialog.isVisible = true
             dialog.toFront()
         }
@@ -171,8 +176,8 @@ class SwitcherOverlay(
         }
     }
 
-    private fun positionOnActiveMonitor() {
-        val workArea = activeMonitorBoundsProvider()
+    private fun positionOnActiveMonitor(precomputedWorkArea: Rectangle?) {
+        val workArea = precomputedWorkArea ?: activeMonitorBoundsProvider()
         if (workArea != null && workArea.width > 0 && workArea.height > 0) {
             val x = workArea.x + (workArea.width - dialog.width) / 2
             val y = workArea.y + (workArea.height - dialog.height) / 2
@@ -183,12 +188,11 @@ class SwitcherOverlay(
     }
 
     private fun updateListItems(matches: List<WindowMatch>, selectedIndex: Int) {
-        listModel.clear()
-        for (match in matches) {
-            listModel.addElement(match)
-        }
+        listModel.setItems(matches)
         if (matches.isNotEmpty() && selectedIndex in matches.indices) {
-            windowList.selectedIndex = selectedIndex
+            if (windowList.selectedIndex != selectedIndex) {
+                windowList.selectedIndex = selectedIndex
+            }
             windowList.ensureIndexIsVisible(selectedIndex)
         } else {
             windowList.clearSelection()
@@ -270,11 +274,17 @@ class SwitcherOverlay(
 
                     KeyEvent.VK_ENTER -> {
                         e.consume()
+                        if (dialog.isVisible) {
+                            dialog.isVisible = false
+                        }
                         stateMachine.onConfirmSelection()
                     }
 
                     KeyEvent.VK_ESCAPE -> {
                         e.consume()
+                        if (dialog.isVisible) {
+                            dialog.isVisible = false
+                        }
                         stateMachine.onDismiss()
                     }
                 }
@@ -284,6 +294,9 @@ class SwitcherOverlay(
         windowList.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 if (e.clickCount >= 1 && windowList.selectedIndex >= 0) {
+                    if (dialog.isVisible) {
+                        dialog.isVisible = false
+                    }
                     stateMachine.onConfirmSelection()
                 }
             }
@@ -301,6 +314,36 @@ class SwitcherOverlay(
     fun dispose() {
         SwingUtilities.invokeLater {
             dialog.dispose()
+        }
+    }
+
+    /**
+     * Bulk-updating [AbstractListModel] backed directly by an immutable [List] of [WindowMatch],
+     * avoiding `DefaultListModel`'s `Vector` copies and per-item `ListDataEvent` storms on every keystroke.
+     */
+    internal class WindowMatchListModel : AbstractListModel<WindowMatch>() {
+        private var items: List<WindowMatch> = emptyList()
+
+        override fun getSize(): Int = items.size
+
+        override fun getElementAt(index: Int): WindowMatch = items[index]
+
+        fun setItems(newItems: List<WindowMatch>) {
+            if (items === newItems || items == newItems) {
+                return
+            }
+            val oldSize = items.size
+            val newSize = newItems.size
+            items = newItems
+            val minSize = minOf(oldSize, newSize)
+            if (minSize > 0) {
+                fireContentsChanged(this, 0, minSize - 1)
+            }
+            if (newSize > oldSize) {
+                fireIntervalAdded(this, oldSize, newSize - 1)
+            } else if (oldSize > newSize) {
+                fireIntervalRemoved(this, newSize, oldSize - 1)
+            }
         }
     }
 }

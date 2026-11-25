@@ -475,6 +475,46 @@ class Win32EngineTest {
     }
 
     @Test
+    fun `StartupRegistry queries writes and deletes HKCU entries via Panama FFM without subprocesses`() {
+        val testSubKey = "Software\\kwswitcher-test-${ProcessHandle.current().pid()}"
+        val registry = StartupRegistry(subKey = testSubKey, valueName = "kwswitcher-unit-test")
+        try {
+            assertFalse(registry.isRegistered())
+            assertNull(registry.getRegisteredCommand())
+
+            val expectedCommand = "\"C:\\Apps\\kwswitcher\\kwswitcher.exe\""
+            assertTrue(registry.setRegistered(enabled = true) { expectedCommand })
+            assertTrue(registry.isRegistered())
+            assertEquals(expectedCommand, registry.getRegisteredCommand())
+
+            assertTrue(registry.setRegistered(enabled = false))
+            assertFalse(registry.isRegistered())
+            assertNull(registry.getRegisteredCommand())
+
+            // Deleting an already-absent value remains idempotent
+            assertTrue(registry.setRegistered(enabled = false))
+        } finally {
+            registry.deleteSubKey()
+        }
+    }
+
+    @Test
+    fun `WindowEnumerator reuses cached MethodHandle and single Panama upcall stub across passes`() {
+        val enumerator = WindowEnumerator()
+        val firstStubAddr = WindowEnumerator.sharedUpcallStubAddress
+        assertTrue(firstStubAddr != 0L)
+
+        enumerator.enumerateOpenWindows()
+        val secondStubAddr = WindowEnumerator.sharedUpcallStubAddress
+        enumerator.enumerateOpenWindows()
+        val thirdStubAddr = WindowEnumerator.sharedUpcallStubAddress
+
+        assertEquals(firstStubAddr, secondStubAddr)
+        assertEquals(secondStubAddr, thirdStubAddr)
+        assertNotNull(WindowEnumerator.ENUM_CALLBACK_HANDLE)
+    }
+
+    @Test
     fun `KeyboardHook state machine swallows trigger key when configured modifier is depressed`() {
         KeyboardHook().use { hook ->
             // Plain Tab without Alt is not swallowed

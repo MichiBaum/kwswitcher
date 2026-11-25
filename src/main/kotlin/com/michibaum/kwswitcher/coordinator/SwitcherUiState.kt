@@ -3,6 +3,7 @@ package com.michibaum.kwswitcher.coordinator
 import com.michibaum.kwswitcher.domain.WindowHandle
 import com.michibaum.kwswitcher.domain.WindowInfo
 import com.michibaum.kwswitcher.domain.WindowMatch
+import java.awt.Rectangle
 
 /**
  * Immutable snapshot of the switcher's current UI state (`FR-2`, `FR-5`, `FR-6`, `FR-8`).
@@ -15,6 +16,7 @@ data class SwitcherUiState(
     val selectedIndex: Int = 0,
     val armedKillHwnd: WindowHandle? = null,
     val multiMonitorDetected: Boolean = false,
+    val activeMonitorWorkArea: Rectangle? = null,
 ) {
     val isVisible: Boolean
         get() = mode != SwitcherMode.HIDDEN

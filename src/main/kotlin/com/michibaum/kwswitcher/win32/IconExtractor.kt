@@ -222,7 +222,7 @@ class IconExtractor internal constructor(
 
         for (iconType in longArrayOf(Win32Bindings.ICON_SMALL2, Win32Bindings.ICON_SMALL, Win32Bindings.ICON_BIG)) {
             resultSegment.set(ValueLayout.JAVA_LONG, 0L, 0L)
-            val ok = Win32Bindings.SendMessageTimeoutW.invokeExact(
+            val ok = Win32Bindings.Icons.SendMessageTimeoutW.invokeExact(
                 hwnd,
                 Win32Bindings.WM_GETICON,
                 iconType,
@@ -238,7 +238,7 @@ class IconExtractor internal constructor(
         }
 
         for (classIndex in intArrayOf(Win32Bindings.GCLP_HICONSM, Win32Bindings.GCLP_HICON)) {
-            val hIcon = Win32Bindings.GetClassLongPtrW.invokeExact(hwnd, classIndex) as Long
+            val hIcon = Win32Bindings.Icons.GetClassLongPtrW.invokeExact(hwnd, classIndex) as Long
             if (hIcon != 0L) return hIcon
         }
         return 0L
@@ -246,7 +246,7 @@ class IconExtractor internal constructor(
 
     private fun convertHIconToImage(arena: Arena, hIcon: MemorySegment): BufferedImage? {
         val iconInfo = arena.allocate(Win32Bindings.ICONINFO_LAYOUT)
-        val ok = Win32Bindings.GetIconInfo.invokeExact(hIcon, iconInfo) as Int
+        val ok = Win32Bindings.Icons.GetIconInfo.invokeExact(hIcon, iconInfo) as Int
         if (ok == 0) {
             return null
         }
@@ -263,7 +263,7 @@ class IconExtractor internal constructor(
             }
 
             val bitmapStruct = arena.allocate(Win32Bindings.BITMAP_LAYOUT)
-            val gotObj = Win32Bindings.GetObjectW.invokeExact(
+            val gotObj = Win32Bindings.Icons.GetObjectW.invokeExact(
                 bitmapToRead,
                 Win32Bindings.BITMAP_LAYOUT.byteSize().toInt(),
                 bitmapStruct,
@@ -278,7 +278,7 @@ class IconExtractor internal constructor(
                 return null
             }
 
-            hdc = Win32Bindings.CreateCompatibleDC.invokeExact(MemorySegment.NULL) as MemorySegment
+            hdc = Win32Bindings.Icons.CreateCompatibleDC.invokeExact(MemorySegment.NULL) as MemorySegment
             if (hdc == MemorySegment.NULL) {
                 return null
             }
@@ -293,7 +293,7 @@ class IconExtractor internal constructor(
 
             val pixelCount = width * height
             val pixelsSegment = arena.allocate(ValueLayout.JAVA_INT, pixelCount.toLong())
-            val linesCopied = Win32Bindings.GetDIBits.invokeExact(
+            val linesCopied = Win32Bindings.Icons.GetDIBits.invokeExact(
                 hdc,
                 bitmapToRead,
                 0,
@@ -332,13 +332,13 @@ class IconExtractor internal constructor(
             return image
         } finally {
             if (hdc != MemorySegment.NULL) {
-                Win32Bindings.DeleteDC.invokeExact(hdc) as Int
+                Win32Bindings.Icons.DeleteDC.invokeExact(hdc) as Int
             }
             if (hbmMask != MemorySegment.NULL) {
-                Win32Bindings.DeleteObject.invokeExact(hbmMask) as Int
+                Win32Bindings.Icons.DeleteObject.invokeExact(hbmMask) as Int
             }
             if (hbmColor != MemorySegment.NULL) {
-                Win32Bindings.DeleteObject.invokeExact(hbmColor) as Int
+                Win32Bindings.Icons.DeleteObject.invokeExact(hbmColor) as Int
             }
         }
     }

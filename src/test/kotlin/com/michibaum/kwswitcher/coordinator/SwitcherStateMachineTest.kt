@@ -2,6 +2,7 @@ package com.michibaum.kwswitcher.coordinator
 
 import com.michibaum.kwswitcher.domain.WindowHandle
 import com.michibaum.kwswitcher.domain.WindowInfo
+import java.awt.Rectangle
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -36,6 +37,30 @@ class SwitcherStateMachineTest {
         assertEquals(windows[1], activateResult.target)
         assertEquals(listOf(windows[1]), activated)
         assertEquals(SwitcherMode.HIDDEN, sm.state.value.mode)
+    }
+
+    @Test
+    fun `session open precomputes active monitor work area once and preserves it across cycling and search`() {
+        var monitorQueries = 0
+        val expectedBounds = Rectangle(0, 0, 1920, 1040)
+        val sm = SwitcherStateMachine(
+            enumerateWindows = { windows },
+            queryActiveMonitorWorkArea = {
+                monitorQueries++
+                expectedBounds
+            },
+        )
+
+        val initialState = sm.onAltTabPressed(reverse = false)
+        assertEquals(expectedBounds, initialState.activeMonitorWorkArea)
+        assertEquals(1, monitorQueries)
+
+        assertEquals(expectedBounds, sm.onAltTabPressed(reverse = false).activeMonitorWorkArea)
+        assertEquals(expectedBounds, sm.onQueryChanged("app").activeMonitorWorkArea)
+        assertEquals(1, monitorQueries)
+
+        sm.onDismiss()
+        assertNull(sm.state.value.activeMonitorWorkArea)
     }
 
     @Test

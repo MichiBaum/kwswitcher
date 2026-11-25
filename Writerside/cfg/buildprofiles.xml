@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE buildprofiles SYSTEM "https://resources.jetbrains.com/writerside/1.0/build-profiles.dtd">
+<buildprofiles xsi:noNamespaceSchemaLocation="https://resources.jetbrains.com/writerside/1.0/build-profiles.xsd"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <variables>
+        <primary-color>blueberry</primary-color>
+        <header-logo>logo.svg</header-logo>
+        <custom-favicons>logo.svg</custom-favicons>
+        <download-title>Download Latest</download-title>
+        <download-page>https://github.com/MichiBaum/kwswitcher/releases/latest</download-page>
+        <showDownloadButton>true</showDownloadButton>
+    </variables>
+    <build-profile instance="kws">
+        <variables>
+            <noindex-content>false</noindex-content>
+        </variables>
+    </build-profile>
+    <footer>
+        <link href="https://github.com/MichiBaum/kwswitcher">GitHub</link>
+        <link href="https://github.com/MichiBaum/kwswitcher/releases">Releases</link>
+        <link href="https://github.com/MichiBaum/kwswitcher/issues">Issues</link>
+    </footer>
+</buildprofiles>
