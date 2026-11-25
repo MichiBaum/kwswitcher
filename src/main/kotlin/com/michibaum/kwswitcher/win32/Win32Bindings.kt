@@ -4,10 +4,13 @@ import java.lang.foreign.Arena
 import java.lang.foreign.FunctionDescriptor
 import java.lang.foreign.Linker
 import java.lang.foreign.MemoryLayout
+import java.lang.foreign.MemoryLayout.PathElement
 import java.lang.foreign.MemorySegment
 import java.lang.foreign.SymbolLookup
 import java.lang.foreign.ValueLayout
 import java.lang.invoke.MethodHandle
+import java.lang.invoke.MethodHandles
+import java.lang.invoke.VarHandle
 
 /**
  * Project Panama (`java.lang.foreign`) native bindings and struct layouts for Win32 APIs
@@ -170,6 +173,94 @@ object Win32Bindings {
         ValueLayout.JAVA_INT.withName("biClrUsed"),
         ValueLayout.JAVA_INT.withName("biClrImportant"),
     )
+
+    @JvmField
+    val KBDLL_VK_CODE: VarHandle = structVarHandle(KBDLLHOOKSTRUCT_LAYOUT, PathElement.groupElement("vkCode"))
+
+    @JvmField
+    val KBDLL_FLAGS: VarHandle = structVarHandle(KBDLLHOOKSTRUCT_LAYOUT, PathElement.groupElement("flags"))
+
+    @JvmField
+    val POINT_X: VarHandle = structVarHandle(POINT_LAYOUT, PathElement.groupElement("x"))
+
+    @JvmField
+    val POINT_Y: VarHandle = structVarHandle(POINT_LAYOUT, PathElement.groupElement("y"))
+
+    @JvmField
+    val MONITORINFO_CB_SIZE: VarHandle = structVarHandle(MONITORINFO_LAYOUT, PathElement.groupElement("cbSize"))
+
+    @JvmField
+    val MONITORINFO_WORK_LEFT: VarHandle = structVarHandle(
+        MONITORINFO_LAYOUT,
+        PathElement.groupElement("rcWork"),
+        PathElement.groupElement("left"),
+    )
+
+    @JvmField
+    val MONITORINFO_WORK_TOP: VarHandle = structVarHandle(
+        MONITORINFO_LAYOUT,
+        PathElement.groupElement("rcWork"),
+        PathElement.groupElement("top"),
+    )
+
+    @JvmField
+    val MONITORINFO_WORK_RIGHT: VarHandle = structVarHandle(
+        MONITORINFO_LAYOUT,
+        PathElement.groupElement("rcWork"),
+        PathElement.groupElement("right"),
+    )
+
+    @JvmField
+    val MONITORINFO_WORK_BOTTOM: VarHandle = structVarHandle(
+        MONITORINFO_LAYOUT,
+        PathElement.groupElement("rcWork"),
+        PathElement.groupElement("bottom"),
+    )
+
+    @JvmField
+    val MONITORINFO_DW_FLAGS: VarHandle = structVarHandle(MONITORINFO_LAYOUT, PathElement.groupElement("dwFlags"))
+
+    @JvmField
+    val ICONINFO_HBM_MASK: VarHandle = structVarHandle(ICONINFO_LAYOUT, PathElement.groupElement("hbmMask"))
+
+    @JvmField
+    val ICONINFO_HBM_COLOR: VarHandle = structVarHandle(ICONINFO_LAYOUT, PathElement.groupElement("hbmColor"))
+
+    @JvmField
+    val BITMAP_BM_WIDTH: VarHandle = structVarHandle(BITMAP_LAYOUT, PathElement.groupElement("bmWidth"))
+
+    @JvmField
+    val BITMAP_BM_HEIGHT: VarHandle = structVarHandle(BITMAP_LAYOUT, PathElement.groupElement("bmHeight"))
+
+    @JvmField
+    val BMIH_BI_SIZE: VarHandle = structVarHandle(BITMAPINFOHEADER_LAYOUT, PathElement.groupElement("biSize"))
+
+    @JvmField
+    val BMIH_BI_WIDTH: VarHandle = structVarHandle(BITMAPINFOHEADER_LAYOUT, PathElement.groupElement("biWidth"))
+
+    @JvmField
+    val BMIH_BI_HEIGHT: VarHandle = structVarHandle(BITMAPINFOHEADER_LAYOUT, PathElement.groupElement("biHeight"))
+
+    @JvmField
+    val BMIH_BI_PLANES: VarHandle = structVarHandle(BITMAPINFOHEADER_LAYOUT, PathElement.groupElement("biPlanes"))
+
+    @JvmField
+    val BMIH_BI_BIT_COUNT: VarHandle = structVarHandle(BITMAPINFOHEADER_LAYOUT, PathElement.groupElement("biBitCount"))
+
+    @JvmField
+    val BMIH_BI_COMPRESSION: VarHandle = structVarHandle(
+        BITMAPINFOHEADER_LAYOUT,
+        PathElement.groupElement("biCompression"),
+    )
+
+    @JvmField
+    val INPUT_ARR_TYPE: VarHandle = structArrayVarHandle(INPUT_LAYOUT, PathElement.groupElement("type"))
+
+    @JvmField
+    val INPUT_ARR_W_VK: VarHandle = structArrayVarHandle(INPUT_LAYOUT, PathElement.groupElement("wVk"))
+
+    @JvmField
+    val INPUT_ARR_DW_FLAGS: VarHandle = structArrayVarHandle(INPUT_LAYOUT, PathElement.groupElement("dwFlags"))
 
     val ENUM_WINDOWS_PROC_DESC: FunctionDescriptor = FunctionDescriptor.of(
         ValueLayout.JAVA_INT,
@@ -643,6 +734,16 @@ object Win32Bindings {
         name = "GetLastError",
         descriptor = FunctionDescriptor.of(ValueLayout.JAVA_INT),
     )
+
+    private fun structVarHandle(
+        layout: MemoryLayout,
+        vararg elements: PathElement,
+    ): VarHandle = MethodHandles.insertCoordinates(layout.varHandle(*elements), 1, 0L)
+
+    private fun structArrayVarHandle(
+        layout: MemoryLayout,
+        vararg elements: PathElement,
+    ): VarHandle = MethodHandles.insertCoordinates(layout.arrayElementVarHandle(*elements), 1, 0L)
 
     private fun downcall(
         lookup: SymbolLookup,

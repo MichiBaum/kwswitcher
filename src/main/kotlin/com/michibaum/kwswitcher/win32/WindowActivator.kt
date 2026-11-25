@@ -113,20 +113,18 @@ class WindowActivator {
     }
 
     private fun sendZeroEffectAltKeyTap(arena: Arena) {
-        val inputSize = Win32Bindings.INPUT_LAYOUT.byteSize()
-        val inputs = arena.allocate(inputSize * 2L, Win32Bindings.INPUT_LAYOUT.byteAlignment())
+        val inputs = arena.allocate(Win32Bindings.INPUT_LAYOUT, 2L)
 
         // Key down (Alt)
-        inputs.set(ValueLayout.JAVA_INT, 0L, Win32Bindings.INPUT_KEYBOARD)
-        inputs.set(ValueLayout.JAVA_SHORT, 8L, Win32Bindings.VK_MENU.toShort())
-        inputs.set(ValueLayout.JAVA_INT, 12L, 0)
+        Win32Bindings.INPUT_ARR_TYPE.set(inputs, 0L, Win32Bindings.INPUT_KEYBOARD)
+        Win32Bindings.INPUT_ARR_W_VK.set(inputs, 0L, Win32Bindings.VK_MENU.toShort())
+        Win32Bindings.INPUT_ARR_DW_FLAGS.set(inputs, 0L, 0)
 
         // Key up (Alt)
-        val secondOffset = inputSize
-        inputs.set(ValueLayout.JAVA_INT, secondOffset + 0L, Win32Bindings.INPUT_KEYBOARD)
-        inputs.set(ValueLayout.JAVA_SHORT, secondOffset + 8L, Win32Bindings.VK_MENU.toShort())
-        inputs.set(ValueLayout.JAVA_INT, secondOffset + 12L, Win32Bindings.KEYEVENTF_KEYUP)
+        Win32Bindings.INPUT_ARR_TYPE.set(inputs, 1L, Win32Bindings.INPUT_KEYBOARD)
+        Win32Bindings.INPUT_ARR_W_VK.set(inputs, 1L, Win32Bindings.VK_MENU.toShort())
+        Win32Bindings.INPUT_ARR_DW_FLAGS.set(inputs, 1L, Win32Bindings.KEYEVENTF_KEYUP)
 
-        Win32Bindings.SendInput.invokeExact(2, inputs, inputSize.toInt()) as Int
+        Win32Bindings.SendInput.invokeExact(2, inputs, Win32Bindings.INPUT_LAYOUT.byteSize().toInt()) as Int
     }
 }

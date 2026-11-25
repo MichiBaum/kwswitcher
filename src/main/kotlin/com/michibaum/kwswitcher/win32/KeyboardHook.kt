@@ -6,7 +6,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import java.lang.foreign.Arena
 import java.lang.foreign.MemorySegment
-import java.lang.foreign.ValueLayout
 import java.lang.invoke.MethodHandles
 import java.lang.invoke.MethodType
 import java.util.concurrent.CountDownLatch
@@ -27,7 +26,7 @@ sealed interface HookKeyEvent {
  * with a `WH_KEYBOARD_LL` upcall stub to intercept the configured switcher hotkey (`FR-1`).
  */
 class KeyboardHook(
-    private val hotkeyConfigProvider: () -> HotkeyConfig = { HotkeyConfig() },
+    private val hotkeyConfigProvider: () -> HotkeyConfig = { DEFAULT_HOTKEY_CONFIG },
 ) : AutoCloseable {
     private val eventChannel = Channel<HookKeyEvent>(Channel.UNLIMITED)
     val events: Flow<HookKeyEvent> = eventChannel.receiveAsFlow()
@@ -142,8 +141,8 @@ class KeyboardHook(
     ): Long {
         if (nCode >= Win32Bindings.HC_ACTION && lParam != MemorySegment.NULL) {
             val structSegment = lParam.reinterpret(Win32Bindings.KBDLLHOOKSTRUCT_LAYOUT.byteSize())
-            val vkCode = structSegment.get(ValueLayout.JAVA_INT, 0L)
-            val flags = structSegment.get(ValueLayout.JAVA_INT, 8L)
+            val vkCode = Win32Bindings.KBDLL_VK_CODE.get(structSegment) as Int
+            val flags = Win32Bindings.KBDLL_FLAGS.get(structSegment) as Int
             val message = wParam.toInt()
 
             val shouldSwallow = processKeyMessage(
@@ -172,7 +171,7 @@ class KeyboardHook(
         val isKeyDown = message == Win32Bindings.WM_KEYDOWN || message == Win32Bindings.WM_SYSKEYDOWN
         val isKeyUp = message == Win32Bindings.WM_KEYUP || message == Win32Bindings.WM_SYSKEYUP
 
-        if (vkCode in hotkey.modifierVkCodes()) {
+        if (hotkey.matchesModifierVk(vkCode)) {
             if (isKeyDown) {
                 modifierHeld = true
             } else if (isKeyUp && modifierHeld) {
@@ -182,7 +181,7 @@ class KeyboardHook(
             return false
         }
 
-        if (vkCode in hotkey.reverseModifierVkCodes()) {
+        if (hotkey.matchesReverseModifierVk(vkCode)) {
             if (isKeyDown) {
                 reverseModifierHeld = true
             } else if (isKeyUp) {
@@ -191,11 +190,11 @@ class KeyboardHook(
             return false
         }
 
-        if (vkCode == hotkey.triggerVkCode()) {
+        if (vkCode == hotkey.triggerVkCode) {
             val altDownFlag = hotkey.isAltModifier && (flags and Win32Bindings.LLKHF_ALTDOWN) != 0
             if (isKeyDown && (modifierHeld || altDownFlag)) {
                 modifierHeld = true
-                val reverse = reverseModifierHeld || isKeyCurrentlyDown(hotkey.reverseModifierPrimaryVk())
+                val reverse = reverseModifierHeld || isKeyCurrentlyDown(hotkey.reverseModifierPrimaryVk)
                 eventChannel.trySend(HookKeyEvent.AltTabPressed(reverse = reverse))
                 return true
             }
@@ -227,5 +226,9 @@ class KeyboardHook(
 
     private fun interface HookCallback {
         fun invoke(nCode: Int, wParam: Long, lParam: MemorySegment): Long
+    }
+
+    private companion object {
+        val DEFAULT_HOTKEY_CONFIG = HotkeyConfig()
     }
 }

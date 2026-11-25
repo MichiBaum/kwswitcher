@@ -39,7 +39,8 @@ fun main() {
     val configRef = AtomicReference(configRepository.loadOrCreate())
     val initialPalette = ThemeManager.applyTheme(configRef.get().theme)
 
-    val iconExtractor = IconExtractor()
+    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val iconExtractor = IconExtractor(parentScope = appScope)
     val windowEnumerator = WindowEnumerator(
         configProvider = { configRef.get() },
     )
@@ -52,7 +53,6 @@ fun main() {
         onTerminateProcess = { target -> windowActivator.terminateProcess(target.pid) },
     )
 
-    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     var overlay: SwitcherOverlay? = null
 
     SwingUtilities.invokeAndWait {
@@ -73,6 +73,7 @@ fun main() {
     if (!hookInstalled) {
         System.err.println("Failed to install Win32 low-level keyboard hook (WH_KEYBOARD_LL).")
         overlay?.dispose()
+        iconExtractor.close()
         appScope.cancel()
         instanceMutex.close()
         return
@@ -124,6 +125,7 @@ fun main() {
         trayController.close()
         keyboardHook.close()
         overlay?.dispose()
+        iconExtractor.close()
         appScope.cancel()
         instanceMutex.close()
     }
