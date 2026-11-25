@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE topic
+        SYSTEM "https://resources.jetbrains.com/writerside/1.0/xhtml-entities.dtd">
+<topic xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:noNamespaceSchemaLocation="https://resources.jetbrains.com/writerside/1.0/topic.v2.xsd"
+       title="Kotlin Switcheroo (%cmd_name%)" id="overview">
+
+    <section-starting-page>
+        <title>%product% (%cmd_name%)</title>
+        <description>
+            A lightweight, keyboard-driven window switcher for Windows 10 and Windows 11 built with Kotlin (JDK %jdk_version%),
+            Swing + FlatLaf, and the Project Panama Foreign Function &amp; Memory API. Switch, search, minimize, close, or
+            terminate open windows in under 20 ms without touching the mouse.
+        </description>
+
+        <spotlight>
+            <a href="installation.md" type="install"
+               summary="Install via MSI, run the portable native bundle, or launch the executable fat JAR and enable Windows startup.">
+                Get Started &amp; Install
+            </a>
+            <a href="usage-and-shortcuts.md" type="keyboard"
+               summary="Master Quick-Switch vs. Interactive Search modes, keyboard shortcuts, in-place window actions, and tray controls.">
+                Usage &amp; Keyboard Shortcuts
+            </a>
+        </spotlight>
+
+        <primary>
+            <title>User Guide</title>
+            <a href="installation.md"
+               summary="System requirements, installation options, single-instance protection, and logon startup setup.">
+                Installation
+            </a>
+            <a href="usage-and-shortcuts.md"
+               summary="Alt+Tab cycling, interactive search locking, window close/minimize/kill actions, and visual badges.">
+                Usage &amp; Shortcuts
+            </a>
+            <a href="search-and-filtering.md"
+               summary="How multi-token fuzzy search ranks prefixes, word boundaries, acronyms, substrings, and subsequences.">
+                Search &amp; Window Filtering
+            </a>
+            <a href="configuration.md"
+               summary="Customize global hotkeys, themes, badges, and process or title ignore rules in config.json.">
+                Configuration Reference
+            </a>
+        </primary>
+
+        <secondary>
+            <title>Developer Guide</title>
+            <a href="architecture.md"
+               summary="Design goals, latency and memory budgets, the 3-thread execution model, and state machine transitions.">
+                System Architecture
+            </a>
+            <a href="win32-panama-ffm.md"
+               summary="JDK 25 java.lang.foreign Win32 bindings, arena lifetimes, hung-window timeouts, foreground-lock bypass, and UIPI.">
+                Win32 &amp; Panama FFM Internals
+            </a>
+            <a href="building-and-releasing.md"
+               summary="Maven test, run, and jpackage profiles, Writerside documentation authoring, and GitHub Actions CI/CD.">
+                Building, Testing &amp; Releasing
+            </a>
+        </secondary>
+
+        <misc>
+            <links>
+                <group>
+                    <title>Project Resources</title>
+                    <a href="https://github.com/MichiBaum/kwswitcher" summary="Browse source code and contribute on GitHub.">
+                        GitHub Repository
+                    </a>
+                    <a href="https://github.com/MichiBaum/kwswitcher/releases/latest" summary="Download the latest Windows portable bundle and JAR.">
+                        Latest Release Downloads
+                    </a>
+                    <a href="https://github.com/MichiBaum/kwswitcher/issues" summary="Report bugs or request features.">
+                        Issue Tracker
+                    </a>
+                </group>
+            </links>
+        </misc>
+    </section-starting-page>
+</topic>

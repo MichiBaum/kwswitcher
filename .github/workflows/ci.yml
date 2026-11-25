@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify, Coverage, Lint & Native Image (Windows JDK 25)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: Run tests, Kover coverage, Detekt, and trimmed jpackage build
+        shell: pwsh
+        run: .\mvnw.cmd -B verify -Pjpackage
+
+      - name: Verify trimmed native app-image and summarize size
+        shell: pwsh
+        run: |
+          $exePath = "target\app-image\kwswitcher\kwswitcher.exe"
+          $cfgPath = "target\app-image\kwswitcher\app\kwswitcher.cfg"
+          $releasePath = "target\app-image\kwswitcher\runtime\release"
+          $modulesImagePath = "target\app-image\kwswitcher\runtime\lib\modules"
+
+          if (-not (Test-Path $exePath)) {
+            throw "Missing packaged launcher: $exePath"
+          }
+          if (-not (Test-Path $cfgPath)) {
+            throw "Missing launcher configuration: $cfgPath"
+          }
+          if (-not (Test-Path $releasePath)) {
+            throw "Missing runtime release manifest: $releasePath"
+          }
+
+          $cfgContent = Get-Content $cfgPath -Raw
+          foreach ($expectedOpt in @("--enable-native-access=ALL-UNNAMED", "-XX:+UseCompactObjectHeaders", "-XX:+UseG1GC", "-Xmx96m")) {
+            if ($cfgContent -notmatch [regex]::Escape($expectedOpt)) {
+              throw "Expected JVM option '$expectedOpt' not found in $cfgPath"
+            }
+          }
+
+          $modulesLine = Get-Content $releasePath | Where-Object { $_ -match '^MODULES=' }
+          if (-not $modulesLine) {
+            throw "MODULES entry missing in $releasePath"
+          }
+          $actualModules = (($modulesLine -replace '^MODULES="', '' -replace '"$', '').Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries) | Sort-Object)
+          $expectedModules = @("java.base", "java.datatransfer", "java.desktop", "java.prefs", "java.xml") | Sort-Object
+          if (($actualModules -join ',') -ne ($expectedModules -join ',')) {
+            throw "Unexpected runtime modules: $($actualModules -join ', ') (expected: $($expectedModules -join ', '))"
+          }
+
+          $totalBytes = (Get-ChildItem "target\app-image\kwswitcher" -Recurse -File | Measure-Object -Property Length -Sum).Sum
+          $totalMb = [math]::Round($totalBytes / 1MB, 2)
+          $modulesMb = [math]::Round((Get-Item $modulesImagePath).Length / 1MB, 2)
+
+          @(
+            "### Native App-Image Smoke Check"
+            ""
+            "| Metric | Value |"
+            "| :--- | :--- |"
+            "| Launcher | ``kwswitcher.exe`` |"
+            "| Linked JDK Modules ($($actualModules.Count)) | ``$($actualModules -join ', ')`` |"
+            "| ``runtime/lib/modules`` Size | **${modulesMb} MB** |"
+            "| Uncompressed ``app-image`` Size | **${totalMb} MB** |"
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+      - name: Upload Kover coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kover-report
+          path: target/site/kover/
+          if-no-files-found: warn
+
+      - name: Upload Detekt static analysis report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: detekt-report
+          path: target/detekt/
+          if-no-files-found: warn

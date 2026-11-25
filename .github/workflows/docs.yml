@@ -1,0 +1,145 @@
+name: Publish Documentation
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (without leading v), e.g. 1.0.0'
+        required: true
+        default: '1.0.0'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  INSTANCE: 'Writerside/kws'
+  ARTIFACT: 'webHelpKWS2-all.zip'
+  DOCKER_VERSION: 'latest'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Stamp release version into Writerside configuration
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import re
+          import xml.sax.saxutils as saxutils
+
+          raw = os.environ["INPUT_VERSION"] if os.environ["EVENT_NAME"] == "workflow_dispatch" else os.environ["REF_NAME"]
+          version = raw.strip().lstrip("v")
+          if not version:
+              raise SystemExit(f"Resolved version from '{raw}' is empty.")
+
+          escaped_version = saxutils.escape(version, {'"': "&quot;"})
+          escaped_tag = f"v{escaped_version}"
+
+          cfg_path = pathlib.Path("Writerside/writerside.cfg")
+          cfg_text, cfg_count = re.subn(
+              r'(<instance\s+src="kws\.tree"\s+version=")[^"]*(")',
+              rf"\g<1>{escaped_tag}\g<2>",
+              cfg_path.read_text(encoding="utf-8"),
+              count=1,
+          )
+          if cfg_count != 1:
+              raise SystemExit("Failed to update instance version in Writerside/writerside.cfg")
+          cfg_path.write_text(cfg_text, encoding="utf-8")
+
+          vars_path = pathlib.Path("Writerside/v.list")
+          vars_text, vars_count = re.subn(
+              r'(<var\s+name="version"\s+value=")[^"]*(")',
+              rf"\g<1>{escaped_version}\g<2>",
+              vars_path.read_text(encoding="utf-8"),
+              count=1,
+          )
+          if vars_count != 1:
+              raise SystemExit("Failed to update version var in Writerside/v.list")
+          vars_path.write_text(vars_text, encoding="utf-8")
+
+          print(f"Stamped Writerside documentation version: {escaped_tag}")
+          PY
+
+      - name: Build Writerside documentation
+        uses: JetBrains/writerside-github-action@v4
+        with:
+          instance: ${{ env.INSTANCE }}
+          artifact: ${{ env.ARTIFACT }}
+          docker-version: ${{ env.DOCKER_VERSION }}
+
+      - name: Upload documentation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs
+          path: |
+            artifacts/${{ env.ARTIFACT }}
+            artifacts/report.json
+          if-no-files-found: error
+          retention-days: 7
+
+  check:
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      contents: read
+    steps:
+      - name: Download documentation artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docs
+          path: artifacts
+
+      - name: Check documentation build report
+        uses: JetBrains/writerside-checker-action@v1
+        with:
+          instance: ${{ env.INSTANCE }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs:
+      - build
+      - check
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - name: Download documentation artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docs
+          path: artifacts
+
+      - name: Extract site archive
+        run: unzip -O UTF-8 -qq "artifacts/${{ env.ARTIFACT }}" -d public
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
