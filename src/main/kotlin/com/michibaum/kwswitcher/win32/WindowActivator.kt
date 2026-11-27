@@ -11,6 +11,11 @@ import java.lang.foreign.ValueLayout
  */
 class WindowActivator {
 
+    private val currentProcessId: Long = ProcessHandle.current().pid()
+
+    @Volatile
+    private var cachedOverlay: CachedOverlay? = null
+
     /**
      * Restores [handle] if minimized and brings it to the foreground, bypassing Windows foreground lock.
      */
@@ -28,29 +33,26 @@ class WindowActivator {
         val currentThreadId = Win32Bindings.Hook.GetCurrentThreadId.invokeExact() as Int
         val foregroundHwnd = Win32Bindings.Enumeration.GetForegroundWindow.invokeExact() as MemorySegment
 
-        var foregroundThreadId = 0
-        var attached = false
-
         Arena.ofConfined().use { arena ->
-            if (foregroundHwnd != MemorySegment.NULL) {
-                val dummyPid = arena.allocate(ValueLayout.JAVA_INT)
-                foregroundThreadId = Win32Bindings.Enumeration.GetWindowThreadProcessId.invokeExact(
-                    foregroundHwnd,
-                    dummyPid,
-                ) as Int
-            }
-
-            if (foregroundThreadId != 0 && foregroundThreadId != currentThreadId) {
+            val foregroundThreadId = resolveAttachableForegroundThreadId(
+                arena = arena,
+                foregroundHwnd = foregroundHwnd,
+                targetHwnd = targetHwnd,
+                currentThreadId = currentThreadId,
+            )
+            val attached = if (foregroundThreadId != 0) {
                 val attachResult = Win32Bindings.Activator.AttachThreadInput.invokeExact(
                     currentThreadId,
                     foregroundThreadId,
                     1,
                 ) as Int
-                attached = attachResult != 0
+                attachResult != 0
+            } else {
+                false
             }
 
             try {
-                sendZeroEffectAltKeyTap(arena)
+                sendZeroEffectUnlockKeyTap(arena)
                 Win32Bindings.Activator.BringWindowToTop.invokeExact(targetHwnd) as Int
                 val focused = Win32Bindings.Activator.SetForegroundWindow.invokeExact(targetHwnd) as Int
                 return focused != 0
@@ -64,6 +66,26 @@ class WindowActivator {
                 }
             }
         }
+    }
+
+    /**
+     * Resolves and brings the switcher overlay dialog ([overlayTitle]) owned by the current JVM process
+     * to the Win32 foreground so Swing's search field receives real OS keyboard focus.
+     */
+    fun activateOverlay(overlayTitle: String = WindowEnumerator.OVERLAY_WINDOW_TITLE): Boolean {
+        val handle = resolveOverlayHandle(overlayTitle)
+        return handle.isValid && activate(handle)
+    }
+
+    /**
+     * Finds the native `HWND` for a top-level window matching [overlayTitle] owned by this JVM process,
+     * caching the result while `IsWindow` remains true.
+     */
+    internal fun resolveOverlayHandle(overlayTitle: String = WindowEnumerator.OVERLAY_WINDOW_TITLE): WindowHandle {
+        if (overlayTitle.isBlank()) {
+            return WindowHandle(0L)
+        }
+        return getValidCachedOverlay(overlayTitle) ?: lookupOverlayHandle(overlayTitle)
     }
 
     /**
@@ -112,19 +134,103 @@ class WindowActivator {
         }
     }
 
-    private fun sendZeroEffectAltKeyTap(arena: Arena) {
-        val inputs = arena.allocate(Win32Bindings.INPUT_LAYOUT, 2L)
+    private fun getValidCachedOverlay(overlayTitle: String): WindowHandle? {
+        val cached = cachedOverlay
+        val isMatch = cached != null && cached.title == overlayTitle && cached.handle.isValid
+        if (!isMatch) {
+            return null
+        }
+        val hwndSegment = MemorySegment.ofAddress(cached.handle.value)
+        val isAlive = (Win32Bindings.Activator.IsWindow.invokeExact(hwndSegment) as Int) != 0
+        return if (isAlive) cached.handle else null
+    }
 
-        // Key down (Alt)
+    private fun lookupOverlayHandle(overlayTitle: String): WindowHandle {
+        Arena.ofConfined().use { arena ->
+            val titleSegment = arena.allocateWideString(overlayTitle)
+            val pidSegment = arena.allocate(ValueLayout.JAVA_INT)
+            var childAfter = MemorySegment.NULL
+            var resolved = WindowHandle(0L)
+
+            while (!resolved.isValid) {
+                val candidate = Win32Bindings.Activator.FindWindowExW.invokeExact(
+                    MemorySegment.NULL,
+                    childAfter,
+                    MemorySegment.NULL,
+                    titleSegment,
+                ) as MemorySegment
+                if (candidate == MemorySegment.NULL) {
+                    break
+                }
+                pidSegment.set(ValueLayout.JAVA_INT, 0L, 0)
+                Win32Bindings.Enumeration.GetWindowThreadProcessId.invokeExact(candidate, pidSegment) as Int
+                val pid = pidSegment.get(ValueLayout.JAVA_INT, 0L)
+                if (pid.toLong() == currentProcessId) {
+                    resolved = WindowHandle(candidate.address())
+                    cachedOverlay = CachedOverlay(title = overlayTitle, handle = resolved)
+                } else {
+                    childAfter = candidate
+                }
+            }
+            return resolved
+        }
+    }
+
+    private fun resolveAttachableForegroundThreadId(
+        arena: Arena,
+        foregroundHwnd: MemorySegment,
+        targetHwnd: MemorySegment,
+        currentThreadId: Int,
+    ): Int {
+        val canAttach = foregroundHwnd != MemorySegment.NULL &&
+            foregroundHwnd != targetHwnd &&
+            (Win32Bindings.Activator.IsHungAppWindow.invokeExact(foregroundHwnd) as Int) == 0
+        if (!canAttach) {
+            return 0
+        }
+        val dummyPid = arena.allocate(ValueLayout.JAVA_INT)
+        val threadId = Win32Bindings.Enumeration.GetWindowThreadProcessId.invokeExact(
+            foregroundHwnd,
+            dummyPid,
+        ) as Int
+        return if (threadId != 0 && threadId != currentThreadId) threadId else 0
+    }
+
+    private fun sendZeroEffectUnlockKeyTap(arena: Arena) {
+        val inputs = arena.allocate(Win32Bindings.INPUT_LAYOUT, UNLOCK_INPUT_COUNT.toLong())
+
+        // Key down (unassigned virtual key 0xFF to unlock foreground without altering Alt/menu state)
         Win32Bindings.INPUT_ARR_TYPE.set(inputs, 0L, Win32Bindings.INPUT_KEYBOARD)
-        Win32Bindings.INPUT_ARR_W_VK.set(inputs, 0L, Win32Bindings.VK_MENU.toShort())
+        Win32Bindings.INPUT_ARR_W_VK.set(inputs, 0L, Win32Bindings.VK_UNLOCK_FOREGROUND.toShort())
         Win32Bindings.INPUT_ARR_DW_FLAGS.set(inputs, 0L, 0)
 
-        // Key up (Alt)
+        // Key up (0xFF)
         Win32Bindings.INPUT_ARR_TYPE.set(inputs, 1L, Win32Bindings.INPUT_KEYBOARD)
-        Win32Bindings.INPUT_ARR_W_VK.set(inputs, 1L, Win32Bindings.VK_MENU.toShort())
+        Win32Bindings.INPUT_ARR_W_VK.set(inputs, 1L, Win32Bindings.VK_UNLOCK_FOREGROUND.toShort())
         Win32Bindings.INPUT_ARR_DW_FLAGS.set(inputs, 1L, Win32Bindings.KEYEVENTF_KEYUP)
 
-        Win32Bindings.Activator.SendInput.invokeExact(2, inputs, Win32Bindings.INPUT_LAYOUT.byteSize().toInt()) as Int
+        Win32Bindings.Activator.SendInput.invokeExact(
+            UNLOCK_INPUT_COUNT,
+            inputs,
+            Win32Bindings.INPUT_LAYOUT.byteSize().toInt(),
+        ) as Int
+    }
+
+    private data class CachedOverlay(
+        val title: String,
+        val handle: WindowHandle,
+    )
+
+    companion object {
+        private const val UNLOCK_INPUT_COUNT: Int = 2
+
+        private fun Arena.allocateWideString(value: String): MemorySegment {
+            val segment = allocate(ValueLayout.JAVA_CHAR, (value.length + 1).toLong())
+            for (i in value.indices) {
+                segment.setAtIndex(ValueLayout.JAVA_CHAR, i.toLong(), value[i])
+            }
+            segment.setAtIndex(ValueLayout.JAVA_CHAR, value.length.toLong(), 0.toChar())
+            return segment
+        }
     }
 }

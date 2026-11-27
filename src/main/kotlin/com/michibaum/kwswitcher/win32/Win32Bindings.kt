@@ -42,13 +42,29 @@ object Win32Bindings {
 
     const val SMTO_ABORTIFHUNG: Int = 0x0002
 
+    const val VK_BACK: Int = 0x08
     const val VK_TAB: Int = 0x09
+    const val VK_RETURN: Int = 0x0D
     const val VK_SHIFT: Int = 0x10
     const val VK_CONTROL: Int = 0x11
     const val VK_MENU: Int = 0x12
+    const val VK_ESCAPE: Int = 0x1B
     const val VK_SPACE: Int = 0x20
+    const val VK_UP: Int = 0x26
+    const val VK_DOWN: Int = 0x28
+    const val VK_DELETE: Int = 0x2E
     const val VK_LWIN: Int = 0x5B
     const val VK_RWIN: Int = 0x5C
+    const val VK_NUMPAD0: Int = 0x60
+    const val VK_NUMPAD1: Int = 0x61
+    const val VK_NUMPAD2: Int = 0x62
+    const val VK_NUMPAD3: Int = 0x63
+    const val VK_NUMPAD4: Int = 0x64
+    const val VK_NUMPAD5: Int = 0x65
+    const val VK_NUMPAD6: Int = 0x66
+    const val VK_NUMPAD7: Int = 0x67
+    const val VK_NUMPAD8: Int = 0x68
+    const val VK_NUMPAD9: Int = 0x69
     const val VK_LSHIFT: Int = 0xA0
     const val VK_RSHIFT: Int = 0xA1
     const val VK_LCONTROL: Int = 0xA2
@@ -56,7 +72,9 @@ object Win32Bindings {
     const val VK_LMENU: Int = 0xA4
     const val VK_RMENU: Int = 0xA5
     const val VK_OEM_3: Int = 0xC0
+    const val VK_UNLOCK_FOREGROUND: Int = 0xFF
 
+    const val LLKHF_INJECTED: Int = 0x10
     const val LLKHF_ALTDOWN: Int = 0x20
 
     const val GWL_STYLE: Int = -16
@@ -744,6 +762,39 @@ object Win32Bindings {
                 ValueLayout.JAVA_INT,
             ),
         )
+
+        @JvmField
+        val FindWindowExW: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "FindWindowExW",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val IsWindow: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "IsWindow",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+            ),
+        )
+
+        @JvmField
+        val IsHungAppWindow: MethodHandle = NativeLinkerHolder.downcall(
+            lookup = User32Lib.lookup,
+            name = "IsHungAppWindow",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS,
+            ),
+        )
     }
 
     /**
@@ -959,6 +1010,9 @@ object Win32Bindings {
     val GetObjectW: MethodHandle get() = Icons.GetObjectW
     val GetDIBits: MethodHandle get() = Icons.GetDIBits
     val TerminateProcess: MethodHandle get() = Activator.TerminateProcess
+    val FindWindowExW: MethodHandle get() = Activator.FindWindowExW
+    val IsWindow: MethodHandle get() = Activator.IsWindow
+    val IsHungAppWindow: MethodHandle get() = Activator.IsHungAppWindow
     val CreateMutexW: MethodHandle get() = Mutex.CreateMutexW
     val ReleaseMutex: MethodHandle get() = Mutex.ReleaseMutex
     val GetLastError: MethodHandle get() = Mutex.GetLastError

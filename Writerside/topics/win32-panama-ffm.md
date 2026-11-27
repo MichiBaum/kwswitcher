@@ -7,7 +7,7 @@
 All Win32 downcall `MethodHandle` bindings, C struct `MemoryLayout` definitions, `VarHandle` field accessors, and callback `FunctionDescriptor` declarations live in `com.michibaum.kwswitcher.win32.Win32Bindings`:
 
 * **DLL Symbol Lookups:** Loaded eagerly via `SymbolLookup.libraryLookup(name, Arena.global())` across five standard Windows system libraries:
-    * `user32.dll` — `SetWindowsHookExW`, `CallNextHookEx`, `GetMessageW`, `EnumWindows`, `GetWindowTextW`, `SetForegroundWindow`, `AttachThreadInput`, `SendInput`, `SendMessageTimeoutW`, `PostMessageW`, `ShowWindow`, `MonitorFromWindow`, `GetMonitorInfoW`
+    * `user32.dll` — `SetWindowsHookExW`, `CallNextHookEx`, `GetMessageW`, `EnumWindows`, `FindWindowExW`, `IsWindow`, `IsHungAppWindow`, `GetWindowTextW`, `SetForegroundWindow`, `AttachThreadInput`, `SendInput`, `SendMessageTimeoutW`, `PostMessageW`, `ShowWindow`, `MonitorFromWindow`, `GetMonitorInfoW`
     * `kernel32.dll` — `GetCurrentThreadId`, `GetModuleHandleW`, `OpenProcess`, `QueryFullProcessImageNameW`, `TerminateProcess`, `CreateMutexW`, `ReleaseMutex`, `CloseHandle`, `GetLastError`
     * `dwmapi.dll` — `DwmGetWindowAttribute` (`DWMWA_CLOAKED`)
     * `gdi32.dll` — `GetObjectW`, `CreateCompatibleDC`, `DeleteDC`, `GetDIBits`, `DeleteObject`
@@ -38,14 +38,14 @@ Calling a synchronous `SendMessageW(hwnd, WM_GETICON, ...)` on an unresponsive (
 
 ### 3. Bypassing Windows Foreground Lock (`SetForegroundWindow`)
 
-Windows prevents background processes from stealing focus via `SetForegroundWindow` unless the calling thread currently owns the foreground window or satisfies strict foreground-lock rules.
+Windows prevents background processes from stealing focus via `SetForegroundWindow` unless the calling thread currently owns the foreground window or satisfies strict foreground-lock rules. Unlike `RegisterHotKey`, intercepting `Alt+Tab` via `WH_KEYBOARD_LL` does **not** automatically grant foreground activation rights to the background JVM process.
 
-When activating a target window in `WindowActivator.activate()`:
+`WindowActivator` and `KeyboardHook` coordinate foreground activation both when **opening `SwitcherOverlay`** (`WindowActivator.activateOverlay`) and when **switching to the chosen target window**:
 
-1. If `IsIconic(targetHwnd)` is non-zero, `ShowWindow(targetHwnd, SW_RESTORE)` unminimizes the window first.
-2. `GetForegroundWindow` + `GetWindowThreadProcessId` identifies the current foreground thread, and `AttachThreadInput(..., 1)` temporarily shares input-processing state when the threads differ.
-3. `sendZeroEffectAltKeyTap` dispatches a synthetic two-event `VK_MENU` keydown + keyup sequence via `SendInput` inside a confined `Arena` to satisfy Windows' recent-input requirement.
-4. `BringWindowToTop` and `SetForegroundWindow` promote the window, and a `finally` block guarantees `AttachThreadInput(..., 0)` detaches thread input cleanly.
+1. **Overlay `HWND` discovery & caching:** `WindowActivator.resolveOverlayHandle()` locates the Swing `JDialog` `HWND` via pure Panama FFM (`FindWindowExW` paired with `GetWindowThreadProcessId` verified against `ProcessHandle.current().pid()`), caching the handle while `IsWindow(hwnd)` remains non-zero—avoiding `sun.awt.windows` reflection and preserving `java.base,java.desktop` `jpackage` runtimes.
+2. **Minimized restore & hung-window guard:** If `IsIconic(targetHwnd)` is non-zero, `ShowWindow(targetHwnd, SW_RESTORE)` unminimizes the window first. Before calling `AttachThreadInput(..., 1)` against `GetForegroundWindow()`, `WindowActivator.activate()` verifies `foregroundHwnd != targetHwnd` and `IsHungAppWindow(foregroundHwnd) == 0` so switching away from a frozen ("Not Responding") application never stalls input synchronization.
+3. **Side-effect-free `0xFF` unlock tap + `LLKHF_INJECTED` filtering:** `sendZeroEffectUnlockKeyTap` dispatches a two-event keydown + keyup sequence using unassigned virtual key `0xFF` (`VK_UNLOCK_FOREGROUND`) via `SendInput` inside a confined `Arena`, while `KeyboardHook` ignores synthetic events flagged with `LLKHF_INJECTED` (`0x10`). Unlike injecting `VK_MENU` (`Alt`), `0xFF` unlocks `SetForegroundWindow` without prematurely triggering `AltReleased` during `Alt+Tab` or activating application menu bars.
+4. **Hook-level shortcut guard:** `BringWindowToTop` and `SetForegroundWindow` promote the window (with `AttachThreadInput(..., 0)` guaranteed in `finally`) so Swing's `JTextField` receives genuine OS keyboard focus for free-form text and `AltGr` characters. Simultaneously, `KeyboardHook` intercepts and swallows management and navigation chords (`Ctrl+W`, `Ctrl+Shift+W`, `Ctrl+M`, `Ctrl+N`/`P`, arrows, `Tab`, `Enter`, `Esc`, `Delete`, and `Alt`-held search typing) whenever the switcher is visible or mid-open so fast chords never leak to the background window.
 
 ### 4. Administrator & Elevated Windows (UIPI)
 

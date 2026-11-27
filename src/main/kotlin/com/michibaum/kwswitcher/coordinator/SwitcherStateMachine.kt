@@ -135,17 +135,35 @@ class SwitcherStateMachine(
     /**
      * Locks the session in `INTERACTIVE_SEARCH` mode and filters/ranks windows against [newQuery].
      */
-    fun onQueryChanged(newQuery: String): SwitcherUiState {
+    fun onQueryChanged(newQuery: String): SwitcherUiState =
+        updateSearchQuery { newQuery }
+
+    /**
+     * Appends [char] to the search query, locking `INTERACTIVE_SEARCH` mode and re-ranking matches.
+     */
+    fun onAppendQueryChar(char: Char): SwitcherUiState =
+        updateSearchQuery { currentQuery -> currentQuery + char }
+
+    /**
+     * Removes the trailing character from the search query (if any) and locks `INTERACTIVE_SEARCH` mode.
+     */
+    fun onBackspaceQuery(): SwitcherUiState =
+        updateSearchQuery { currentQuery ->
+            if (currentQuery.isNotEmpty()) currentQuery.dropLast(1) else ""
+        }
+
+    private fun updateSearchQuery(transform: (String) -> String): SwitcherUiState {
         var updatedState = _state.value
         _state.update { current ->
             if (current.mode == SwitcherMode.HIDDEN) {
                 updatedState = current
                 return@update current
             }
-            val matches = WindowFilter.match(windows = current.allWindows, query = newQuery)
+            val nextQuery = transform(current.query)
+            val matches = WindowFilter.match(windows = current.allWindows, query = nextQuery)
             val next = current.copy(
                 mode = SwitcherMode.INTERACTIVE_SEARCH,
-                query = newQuery,
+                query = nextQuery,
                 matches = matches,
                 selectedIndex = 0,
                 armedKillHwnd = null,

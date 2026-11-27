@@ -7,9 +7,11 @@ import com.michibaum.kwswitcher.config.ThemeOption
 import com.michibaum.kwswitcher.coordinator.SwitcherStateMachine
 import com.michibaum.kwswitcher.ui.SwitcherOverlay
 import com.michibaum.kwswitcher.ui.SystemTrayController
+import com.michibaum.kwswitcher.win32.HookAction
 import com.michibaum.kwswitcher.win32.HookKeyEvent
 import com.michibaum.kwswitcher.win32.IconExtractor
 import com.michibaum.kwswitcher.win32.KeyboardHook
+import com.michibaum.kwswitcher.win32.OverlayHookSnapshot
 import com.michibaum.kwswitcher.win32.SingleInstanceMutex
 import com.michibaum.kwswitcher.win32.WindowActivator
 import com.michibaum.kwswitcher.win32.WindowEnumerator
@@ -85,6 +87,18 @@ fun main() {
             stateMachine = stateMachine,
             iconExtractor = iconExtractor,
             activeMonitorBoundsProvider = { windowEnumerator.getActiveMonitorWorkArea() },
+            onRequestForegroundFocus = {
+                appScope.launch(win32Dispatcher) {
+                    if (stateMachine.state.value.isVisible) {
+                        windowActivator.activateOverlay()
+                        withContext(Dispatchers.Swing) {
+                            if (stateMachine.state.value.isVisible) {
+                                overlay?.ensureSearchFocus()
+                            }
+                        }
+                    }
+                }
+            },
             initialConfig = configRef.get(),
             initialPalette = initialPalette,
         )
@@ -93,6 +107,17 @@ fun main() {
     val shutdownLatch = CountDownLatch(1)
     val keyboardHook = KeyboardHook(
         hotkeyConfigProvider = { configRef.get().hotkey },
+        overlayStateProvider = {
+            val current = stateMachine.state.value
+            if (!current.isVisible) {
+                OverlayHookSnapshot.HIDDEN
+            } else {
+                OverlayHookSnapshot(
+                    mode = current.mode,
+                    isQueryEmpty = current.query.isEmpty(),
+                )
+            }
+        },
     )
     val hookInstalled = keyboardHook.start()
     if (!hookInstalled) {
@@ -144,10 +169,11 @@ fun main() {
 
     appScope.launch(win32Dispatcher) {
         keyboardHook.events.collect { event ->
-            when (event) {
-                is HookKeyEvent.AltTabPressed -> stateMachine.onAltTabPressed(reverse = event.reverse)
-                HookKeyEvent.AltReleased -> stateMachine.onAltReleased()
-            }
+            dispatchHookEvent(
+                event = event,
+                stateMachine = stateMachine,
+                keyboardHook = keyboardHook,
+            )
         }
     }
 
@@ -176,4 +202,43 @@ fun main() {
     println("Kotlin Switcheroo (kwswitcher) is running. Press Alt+Tab to invoke, or Ctrl+C to exit.")
     shutdownLatch.await()
     cleanup()
+}
+
+internal fun dispatchHookEvent(
+    event: HookKeyEvent,
+    stateMachine: SwitcherStateMachine,
+    keyboardHook: KeyboardHook,
+) {
+    when (event) {
+        is HookKeyEvent.AltTabPressed -> {
+            try {
+                stateMachine.onAltTabPressed(reverse = event.reverse)
+            } finally {
+                keyboardHook.acknowledgeAltTabHandled()
+            }
+        }
+
+        HookKeyEvent.AltReleased -> stateMachine.onAltReleased()
+        HookKeyEvent.BackspaceSearch -> stateMachine.onBackspaceQuery()
+        is HookKeyEvent.AppendSearchChar -> stateMachine.onAppendQueryChar(event.char)
+        is HookKeyEvent.Action -> dispatchHookAction(action = event.action, stateMachine = stateMachine)
+    }
+}
+
+private fun dispatchHookAction(
+    action: HookAction,
+    stateMachine: SwitcherStateMachine,
+) {
+    when (action) {
+        is HookAction.MoveSelection -> stateMachine.onMoveSelection(
+            delta = action.delta,
+            lockInteractive = action.lockInteractive,
+        )
+
+        HookAction.CloseSelectedWindow -> stateMachine.onCloseSelectedWindow()
+        HookAction.MinimizeSelectedWindow -> stateMachine.onMinimizeSelectedWindow()
+        HookAction.KillSelectedProcess -> stateMachine.onKillSelectedWindowProcess()
+        HookAction.ConfirmSelection -> stateMachine.onConfirmSelection()
+        HookAction.Dismiss -> stateMachine.onDismiss()
+    }
 }

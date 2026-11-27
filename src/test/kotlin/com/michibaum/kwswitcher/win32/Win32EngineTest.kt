@@ -2,6 +2,7 @@ package com.michibaum.kwswitcher.win32
 
 import com.michibaum.kwswitcher.config.HotkeyConfig
 import com.michibaum.kwswitcher.config.SwitcherConfig
+import com.michibaum.kwswitcher.coordinator.SwitcherMode
 import com.michibaum.kwswitcher.domain.WindowHandle
 import com.michibaum.kwswitcher.domain.WindowInfo
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -9,6 +10,8 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import java.awt.Color
+import java.awt.GraphicsEnvironment
+import java.awt.Toolkit
 import java.awt.image.BufferedImage
 import java.lang.foreign.Arena
 import java.lang.foreign.MemorySegment
@@ -18,6 +21,9 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.ImageIcon
+import javax.swing.JDialog
+import javax.swing.SwingUtilities
+import org.junit.jupiter.api.Assumptions.assumeFalse
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -594,6 +600,286 @@ class Win32EngineTest {
                     flags = 0,
                 ),
             )
+        }
+    }
+
+    @Test
+    fun `Win32Bindings exposes foreground unlock constants and window discovery downcalls`() {
+        assertEquals(0x08, Win32Bindings.VK_BACK)
+        assertEquals(0x0D, Win32Bindings.VK_RETURN)
+        assertEquals(0x1B, Win32Bindings.VK_ESCAPE)
+        assertEquals(0x26, Win32Bindings.VK_UP)
+        assertEquals(0x28, Win32Bindings.VK_DOWN)
+        assertEquals(0x2E, Win32Bindings.VK_DELETE)
+        assertEquals(0x60, Win32Bindings.VK_NUMPAD0)
+        assertEquals(0x69, Win32Bindings.VK_NUMPAD9)
+        assertEquals(0xFF, Win32Bindings.VK_UNLOCK_FOREGROUND)
+        assertEquals(0x10, Win32Bindings.LLKHF_INJECTED)
+
+        assertNotNull(Win32Bindings.FindWindowExW)
+        assertNotNull(Win32Bindings.IsWindow)
+        assertNotNull(Win32Bindings.IsHungAppWindow)
+        assertEquals(0, Win32Bindings.IsWindow.invokeExact(MemorySegment.NULL) as Int)
+        assertEquals(0, Win32Bindings.IsHungAppWindow.invokeExact(MemorySegment.NULL) as Int)
+
+        Arena.ofConfined().use { arena ->
+            val inputs = arena.allocate(Win32Bindings.INPUT_LAYOUT, 2L)
+            Win32Bindings.INPUT_ARR_W_VK.set(inputs, 0L, Win32Bindings.VK_UNLOCK_FOREGROUND.toShort())
+            assertEquals(0xFF, (inputs.get(ValueLayout.JAVA_SHORT, 8L).toInt() and 0xFFFF))
+        }
+    }
+
+    @Test
+    fun `WindowActivator resolves caches and invalidates live Swing dialog HWND owned by current PID`() {
+        val activator = WindowActivator()
+        assertFalse(activator.activate(WindowHandle(0L)))
+        assertFalse(activator.resolveOverlayHandle("").isValid)
+        assertFalse(activator.resolveOverlayHandle("kwswitcher-nonexistent-${System.nanoTime()}").isValid)
+        assertFalse(activator.activateOverlay("kwswitcher-nonexistent-${System.nanoTime()}"))
+
+        assumeFalse(GraphicsEnvironment.isHeadless())
+
+        val previousForeground = Win32Bindings.Enumeration.GetForegroundWindow.invokeExact() as MemorySegment
+        val testTitle = "kwswitcher-overlay-test-${ProcessHandle.current().pid()}-${System.nanoTime()}"
+        var dialog: JDialog? = null
+
+        try {
+            SwingUtilities.invokeAndWait {
+                dialog = JDialog(null as java.awt.Frame?, testTitle, false).apply {
+                    isUndecorated = true
+                    setBounds(-32000, -32000, 16, 16)
+                    isVisible = true
+                }
+            }
+
+            val firstHandle = activator.resolveOverlayHandle(testTitle)
+            assertTrue(firstHandle.isValid, "Live JDialog HWND owned by current PID should be resolved")
+
+            val hwndSeg = MemorySegment.ofAddress(firstHandle.value)
+            assertTrue((Win32Bindings.IsWindow.invokeExact(hwndSeg) as Int) != 0)
+            assertEquals(0, Win32Bindings.IsHungAppWindow.invokeExact(hwndSeg) as Int)
+
+            // Second lookup returns cached valid handle
+            val cachedHandle = activator.resolveOverlayHandle(testTitle)
+            assertEquals(firstHandle, cachedHandle)
+
+            // Exercise native foreground unlock + activation path without throwing
+            activator.activateOverlay(testTitle)
+
+            // Dispose dialog and confirm IsWindow invalidates cached handle once AWT-Windows destroys the peer
+            SwingUtilities.invokeAndWait {
+                dialog?.dispose()
+                dialog = null
+            }
+            Toolkit.getDefaultToolkit().sync()
+            val deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(1)
+            while ((Win32Bindings.IsWindow.invokeExact(hwndSeg) as Int) != 0 && System.nanoTime() < deadlineNanos) {
+                Thread.sleep(5)
+            }
+            assertEquals(0, Win32Bindings.IsWindow.invokeExact(hwndSeg) as Int)
+            assertFalse(activator.resolveOverlayHandle(testTitle).isValid)
+        } finally {
+            if (dialog != null) {
+                SwingUtilities.invokeAndWait { dialog?.dispose() }
+            }
+            if (previousForeground != MemorySegment.NULL) {
+                activator.activate(WindowHandle(previousForeground.address()))
+            }
+        }
+    }
+}
+
+class KeyboardHookGuardTest {
+
+    @Test
+    fun `KeyboardHook ignores LLKHF_INJECTED synthetic events without altering modifier state`() {
+        Arena.ofConfined().use { arena ->
+            val kbd = arena.allocate(Win32Bindings.KBDLLHOOKSTRUCT_LAYOUT)
+            KeyboardHook(keyStateProvider = { false }).use { hook ->
+                // Physical LeftAlt down
+                hook.processKeyMessage(Win32Bindings.WM_SYSKEYDOWN, Win32Bindings.VK_LMENU, Win32Bindings.LLKHF_ALTDOWN)
+
+                // Synthetic 0xFF unlock tap + synthetic VK_MENU keyup must be ignored by handleLowLevelKey
+                Win32Bindings.KBDLL_VK_CODE.set(kbd, Win32Bindings.VK_UNLOCK_FOREGROUND)
+                Win32Bindings.KBDLL_FLAGS.set(kbd, Win32Bindings.LLKHF_INJECTED)
+                hook.handleLowLevelKey(Win32Bindings.HC_ACTION, Win32Bindings.WM_KEYDOWN.toLong(), kbd)
+                hook.handleLowLevelKey(Win32Bindings.HC_ACTION, Win32Bindings.WM_KEYUP.toLong(), kbd)
+
+                Win32Bindings.KBDLL_VK_CODE.set(kbd, Win32Bindings.VK_MENU)
+                Win32Bindings.KBDLL_FLAGS.set(kbd, Win32Bindings.LLKHF_INJECTED)
+                hook.handleLowLevelKey(Win32Bindings.HC_ACTION, Win32Bindings.WM_KEYUP.toLong(), kbd)
+
+                assertNull(hook.pollEvent(), "Synthetic events must not emit AltReleased")
+
+                // Physical Tab still sees modifierHeld == true and triggers AltTabPressed
+                assertTrue(
+                    hook.processKeyMessage(
+                        message = Win32Bindings.WM_SYSKEYDOWN,
+                        vkCode = Win32Bindings.VK_TAB,
+                        flags = Win32Bindings.LLKHF_ALTDOWN,
+                    ),
+                )
+                assertEquals(HookKeyEvent.AltTabPressed(reverse = false), hook.pollEvent())
+            }
+        }
+    }
+
+    @Test
+    fun `KeyboardHook swallows management and navigation chords when visible and passes through when hidden`() {
+        var snapshot = OverlayHookSnapshot(mode = SwitcherMode.HIDDEN, isQueryEmpty = true)
+        KeyboardHook(
+            overlayStateProvider = { snapshot },
+            keyStateProvider = { false },
+        ).use { hook ->
+            // When HIDDEN, shortcuts pass through untouched
+            hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, Win32Bindings.VK_LCONTROL, 0)
+            assertFalse(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, 'W'.code, 0))
+            hook.processKeyMessage(Win32Bindings.WM_KEYUP, Win32Bindings.VK_LCONTROL, 0)
+            assertFalse(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, Win32Bindings.VK_RETURN, 0))
+            assertFalse(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, Win32Bindings.VK_ESCAPE, 0))
+            assertFalse(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, Win32Bindings.VK_DOWN, 0))
+            assertNull(hook.pollEvent())
+
+            // Visible with empty query: navigation & actions are swallowed and emitted
+            snapshot = OverlayHookSnapshot(mode = SwitcherMode.INTERACTIVE_SEARCH, isQueryEmpty = true)
+            assertTrue(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, Win32Bindings.VK_DOWN, 0))
+            assertEquals(HookKeyEvent.Action(HookAction.MoveSelection(1, true)), hook.pollEvent())
+            assertTrue(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, Win32Bindings.VK_UP, 0))
+            assertEquals(HookKeyEvent.Action(HookAction.MoveSelection(-1, true)), hook.pollEvent())
+            assertTrue(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, Win32Bindings.VK_TAB, 0))
+            assertEquals(HookKeyEvent.Action(HookAction.MoveSelection(1, false)), hook.pollEvent())
+
+            hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, Win32Bindings.VK_LSHIFT, 0)
+            assertTrue(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, Win32Bindings.VK_TAB, 0))
+            assertEquals(HookKeyEvent.Action(HookAction.MoveSelection(-1, false)), hook.pollEvent())
+            hook.processKeyMessage(Win32Bindings.WM_KEYUP, Win32Bindings.VK_LSHIFT, 0)
+
+            assertTrue(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, Win32Bindings.VK_DELETE, 0))
+            assertEquals(HookKeyEvent.Action(HookAction.CloseSelectedWindow), hook.pollEvent())
+            assertTrue(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, Win32Bindings.VK_RETURN, 0))
+            assertEquals(HookKeyEvent.Action(HookAction.ConfirmSelection), hook.pollEvent())
+            assertTrue(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, Win32Bindings.VK_ESCAPE, 0))
+            assertEquals(HookKeyEvent.Action(HookAction.Dismiss), hook.pollEvent())
+        }
+    }
+
+    @Test
+    fun `KeyboardHook handles Ctrl chords and non-empty query Delete pass-through`() {
+        var snapshot = OverlayHookSnapshot(mode = SwitcherMode.INTERACTIVE_SEARCH, isQueryEmpty = false)
+        KeyboardHook(
+            overlayStateProvider = { snapshot },
+            keyStateProvider = { false },
+        ).use { hook ->
+            // Non-empty query: plain Delete passes through to JTextField
+            assertFalse(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, Win32Bindings.VK_DELETE, 0))
+            assertNull(hook.pollEvent())
+
+            // Ctrl chords: Ctrl+W, Ctrl+Shift+W, Ctrl+M, Ctrl+N, Ctrl+P, Ctrl+Delete
+            hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, Win32Bindings.VK_LCONTROL, 0)
+            assertTrue(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, 'W'.code, 0))
+            assertEquals(HookKeyEvent.Action(HookAction.CloseSelectedWindow), hook.pollEvent())
+            assertTrue(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, 'M'.code, 0))
+            assertEquals(HookKeyEvent.Action(HookAction.MinimizeSelectedWindow), hook.pollEvent())
+            assertTrue(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, 'N'.code, 0))
+            assertEquals(HookKeyEvent.Action(HookAction.MoveSelection(1, true)), hook.pollEvent())
+            assertTrue(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, 'P'.code, 0))
+            assertEquals(HookKeyEvent.Action(HookAction.MoveSelection(-1, true)), hook.pollEvent())
+            assertTrue(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, Win32Bindings.VK_DELETE, 0))
+            assertEquals(HookKeyEvent.Action(HookAction.CloseSelectedWindow), hook.pollEvent())
+
+            hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, Win32Bindings.VK_LSHIFT, 0)
+            assertTrue(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, 'W'.code, 0))
+            assertEquals(HookKeyEvent.Action(HookAction.KillSelectedProcess), hook.pollEvent())
+
+            snapshot = OverlayHookSnapshot(mode = SwitcherMode.HIDDEN, isQueryEmpty = true)
+            assertFalse(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, 'W'.code, 0))
+        }
+    }
+
+    @Test
+    fun `KeyboardHook pending-open counter guards fast chords before StateFlow visibility updates`() {
+        val snapshot = OverlayHookSnapshot(mode = SwitcherMode.HIDDEN, isQueryEmpty = true)
+        KeyboardHook(
+            overlayStateProvider = { snapshot },
+            keyStateProvider = { false },
+        ).use { hook ->
+            // Press Alt+Tab while snapshot is still HIDDEN -> increments pendingOpenCount
+            hook.processKeyMessage(Win32Bindings.WM_SYSKEYDOWN, Win32Bindings.VK_LMENU, Win32Bindings.LLKHF_ALTDOWN)
+            assertTrue(
+                hook.processKeyMessage(Win32Bindings.WM_SYSKEYDOWN, Win32Bindings.VK_TAB, Win32Bindings.LLKHF_ALTDOWN),
+            )
+
+            // Fast Ctrl+W and Alt+'A' before StateFlow updates are still captured in FIFO order
+            hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, Win32Bindings.VK_LCONTROL, Win32Bindings.LLKHF_ALTDOWN)
+            assertTrue(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, 'W'.code, Win32Bindings.LLKHF_ALTDOWN))
+            hook.processKeyMessage(Win32Bindings.WM_KEYUP, Win32Bindings.VK_LCONTROL, Win32Bindings.LLKHF_ALTDOWN)
+            assertTrue(hook.processKeyMessage(Win32Bindings.WM_SYSKEYDOWN, 'A'.code, Win32Bindings.LLKHF_ALTDOWN))
+
+            assertEquals(HookKeyEvent.AltTabPressed(reverse = false), hook.pollEvent())
+            assertEquals(HookKeyEvent.Action(HookAction.CloseSelectedWindow), hook.pollEvent())
+            assertEquals(HookKeyEvent.AppendSearchChar('a'), hook.pollEvent())
+
+            // Once acknowledged and snapshot remains HIDDEN, keys pass through normally again
+            hook.acknowledgeAltTabHandled()
+            assertFalse(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, Win32Bindings.VK_RETURN, 0))
+        }
+    }
+
+    @Test
+    fun `KeyboardHook captures Alt-held search typing and passes European AltGr through to Swing`() {
+        var snapshot = OverlayHookSnapshot(mode = SwitcherMode.QUICK_SWITCH, isQueryEmpty = true)
+        KeyboardHook(
+            overlayStateProvider = { snapshot },
+            keyStateProvider = { false },
+        ).use { hook ->
+            hook.processKeyMessage(Win32Bindings.WM_SYSKEYDOWN, Win32Bindings.VK_LMENU, Win32Bindings.LLKHF_ALTDOWN)
+
+            assertTrue(hook.processKeyMessage(Win32Bindings.WM_SYSKEYDOWN, 'C'.code, Win32Bindings.LLKHF_ALTDOWN))
+            assertEquals(HookKeyEvent.AppendSearchChar('c'), hook.pollEvent())
+
+            hook.processKeyMessage(Win32Bindings.WM_SYSKEYDOWN, Win32Bindings.VK_LSHIFT, Win32Bindings.LLKHF_ALTDOWN)
+            assertTrue(hook.processKeyMessage(Win32Bindings.WM_SYSKEYDOWN, 'C'.code, Win32Bindings.LLKHF_ALTDOWN))
+            assertEquals(HookKeyEvent.AppendSearchChar('C'), hook.pollEvent())
+            hook.processKeyMessage(Win32Bindings.WM_SYSKEYUP, Win32Bindings.VK_LSHIFT, Win32Bindings.LLKHF_ALTDOWN)
+
+            assertTrue(hook.processKeyMessage(Win32Bindings.WM_SYSKEYDOWN, '1'.code, Win32Bindings.LLKHF_ALTDOWN))
+            assertEquals(HookKeyEvent.AppendSearchChar('1'), hook.pollEvent())
+            assertTrue(
+                hook.processKeyMessage(
+                    Win32Bindings.WM_SYSKEYDOWN,
+                    Win32Bindings.VK_NUMPAD7,
+                    Win32Bindings.LLKHF_ALTDOWN,
+                ),
+            )
+            assertEquals(HookKeyEvent.AppendSearchChar('7'), hook.pollEvent())
+            assertTrue(
+                hook.processKeyMessage(
+                    Win32Bindings.WM_SYSKEYDOWN,
+                    Win32Bindings.VK_SPACE,
+                    Win32Bindings.LLKHF_ALTDOWN,
+                ),
+            )
+            assertEquals(HookKeyEvent.AppendSearchChar(' '), hook.pollEvent())
+            assertTrue(
+                hook.processKeyMessage(
+                    Win32Bindings.WM_SYSKEYDOWN,
+                    Win32Bindings.VK_BACK,
+                    Win32Bindings.LLKHF_ALTDOWN,
+                ),
+            )
+            assertEquals(HookKeyEvent.BackspaceSearch, hook.pollEvent())
+
+            // Release LeftAlt, switch to INTERACTIVE_SEARCH, and press European AltGr (LCtrl + RAlt)
+            hook.processKeyMessage(Win32Bindings.WM_KEYUP, Win32Bindings.VK_LMENU, 0)
+            assertEquals(HookKeyEvent.AltReleased, hook.pollEvent())
+            snapshot = OverlayHookSnapshot(mode = SwitcherMode.INTERACTIVE_SEARCH, isQueryEmpty = false)
+
+            hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, Win32Bindings.VK_LCONTROL, 0)
+            hook.processKeyMessage(Win32Bindings.WM_SYSKEYDOWN, Win32Bindings.VK_RMENU, Win32Bindings.LLKHF_ALTDOWN)
+            assertFalse(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, 'M'.code, Win32Bindings.LLKHF_ALTDOWN))
+            assertFalse(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, 'W'.code, Win32Bindings.LLKHF_ALTDOWN))
+            assertFalse(hook.processKeyMessage(Win32Bindings.WM_KEYDOWN, 'Q'.code, Win32Bindings.LLKHF_ALTDOWN))
+            assertNull(hook.pollEvent())
         }
     }
 }
