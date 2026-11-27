@@ -13,8 +13,9 @@ By default, `ConfigRepository` loads and saves settings at:
 
 On a standard Windows installation, this resolves to `C:\Users\<YourUsername>\AppData\Roaming\kwswitcher\config.json` (if the `APPDATA` environment variable is not set, `%cmd_name%` falls back to `~/.kwswitcher/config.json`).
 
-* **Automatic creation:** If `config.json` does not exist when `%cmd_name%` starts, it is created automatically with the default settings shown below.
-* **Fault-tolerant parsing:** Omitted fields, unknown enum names, or malformed regular expressions fall back cleanly to built-in defaults rather than preventing startup.
+* **Developer & custom paths:** Launching with `--dev` isolates settings at `%\LOCALAPPDATA%\kwswitcher-dev\config.json` (defaulting to `Alt + Space` on first creation), and `--config <path>` overrides the configuration file location explicitly.
+* **Automatic creation:** If `config.json` does not exist when `%cmd_name%` starts, it is created automatically with `kotlinx-serialization-json` pretty-printed defaults.
+* **Fault-tolerant parsing with diagnostics:** Omitted fields, unknown future properties, case-insensitive enum names, or malformed regular expressions fall back cleanly to built-in defaults while recording exact parse or regex warnings in `logs\kwswitcher.log` (inspectable via **System Tray -> Open Log Directory** or **Copy Diagnostics**).
 * **Live reload:** After editing `config.json` in any text editor, right-click the system tray icon and click **Reload Config** to apply your changes immediately.
 
 To open the file quickly from PowerShell:

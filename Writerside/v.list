@@ -3,7 +3,7 @@
 <vars>
     <var name="product" value="Kotlin Switcheroo"/>
     <var name="cmd_name" value="kwswitcher"/>
-    <var name="version" value="1.0.0-SNAPSHOT"/>
+    <var name="version" value="1.2.0-SNAPSHOT"/>
     <var name="jdk_version" value="25"/>
     <var name="github_repo" value="https://github.com/MichiBaum/kwswitcher"/>
 </vars>

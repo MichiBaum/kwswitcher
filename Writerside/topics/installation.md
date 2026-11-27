@@ -39,9 +39,10 @@ If you already have **JDK %jdk_version%+** installed on `PATH`, you can run the 
 
 ```powershell
 java --enable-native-access=ALL-UNNAMED `
-  -Xms16m -Xmx64m `
   -XX:+UseCompactObjectHeaders `
-  -XX:+UseSerialGC `
+  -XX:+UseG1GC `
+  -Xms16m -Xmx96m `
+  -XX:MaxGCPauseMillis=10 -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30 `
   -jar kwswitcher-%version%-jar-with-dependencies.jar
 ```
 

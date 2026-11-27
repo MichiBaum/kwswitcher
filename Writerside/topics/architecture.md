@@ -26,45 +26,46 @@ Source KDoc comments across the codebase reference these functional requirement 
 | **`FR-6`** | **List Navigation & In-Switcher Window Actions** | Support `Down`/`Up`, `Tab`/`Shift+Tab`, and `Ctrl+N`/`Ctrl+P` with wrap-around; `Enter` or mouse click to activate; `Esc` or focus loss to dismiss. Support in-place window actions without closing the switcher: `Ctrl+W`, `Delete` (empty query), or `Ctrl+Delete` to gracefully close (`PostMessageW(hwnd, WM_CLOSE, 0, 0)`), `Ctrl+M` to minimize in-place (`ShowWindow(hwnd, SW_MINIMIZE)`), and two-step `Ctrl+Shift+W` to force-terminate the owning process (`TerminateProcess`). |
 | **`FR-7`** | **Reliable Focus Activation** | Restore minimized windows (`IsIconic` -> `ShowWindow(hwnd, SW_RESTORE)`) and reliably bring target windows to the foreground (`SetForegroundWindow`) by bypassing Windows' foreground-lock restrictions via `AttachThreadInput` and synthetic `SendInput`. |
 | **`FR-8`** | **Visual Badges & Theme Selection** | Render each window row with its application icon, highlighted title match spans, armed kill badge, minimized badge (`[Minimized]`), multi-monitor badge (`[Mon N]`), and process badge. Support `DARK`, `LIGHT`, and `SYSTEM` themes via FlatLaf. |
-| **`FR-9`** | **System Tray, Config & Single Instance** | Enforce a single running instance (`CreateMutexW`), persist configuration in `%\APPDATA%\kwswitcher\config.json`, and provide a system tray icon with *Show Switcher*, *Reload Config*, *Theme*, *Run at Windows Startup*, and *Quit* actions. |
+| **`FR-9`** | **System Tray, Config, Diagnostics & Single Instance** | Enforce single-instance execution (`CreateMutexW` with isolated `PRODUCTION` and `DEV` mutexes), persist `@Serializable` configuration in `%\APPDATA%\kwswitcher\config.json` (or `%\LOCALAPPDATA%\kwswitcher-dev\config.json` in `--dev` mode), write rotating diagnostic logs, and provide a system tray icon with *Show Switcher*, *Reload Config*, *Theme*, *Pin Overlay* (in dev/sandbox), *Open Log Directory*, *Copy Diagnostics*, *Run at Windows Startup*, and *Quit* actions. |
 
 ## Non-Functional Budgets
 
 * **Invocation & Search Latency:** The overlay renders and accepts keyboard input within **20 ms** of the hotkey press; multi-token fuzzy filtering across 100 open windows completes in under **5 ms**.
-* **Memory Footprint:** Resident idle memory stays well under **85 MB** (packaged with `-Xms16m -Xmx64m -XX:+UseCompactObjectHeaders -XX:+UseSerialGC`, `--enable-native-access=ALL-UNNAMED`, and deterministic `Arena.ofConfined()` native segments).
+* **Memory Footprint:** Resident idle memory stays well under **85 MB** (packaged with `--add-modules java.base,java.desktop`, `-Xms16m -Xmx96m -XX:+UseCompactObjectHeaders -XX:+UseG1GC -XX:MaxGCPauseMillis=10`, `--enable-native-access=ALL-UNNAMED`, and deterministic `Arena.ofConfined()` native segments).
 * **Multi-Monitor & DPI Awareness:** The overlay centers on the active monitor's work area (`rcWork`) and scales crisply across mixed-DPI displays (`100%`–`250%`) using JDK %jdk_version% Swing HiDPI scaling and direct `Graphics2D` text rendering.
 * **Hook Safety:** The `WH_KEYBOARD_LL` upcall executes in `O(1)` time with zero heap allocations on non-matching keys and returns in under **5 ms**—well below Windows' `300 ms` `LowLevelHooksTimeout` threshold.
 
-## Three-Thread Execution Model
+## Three-Thread Unidirectional Execution Model
 
-Because Win32 hooks, native window operations, and Swing UI components each enforce strict thread-affinity rules, `%cmd_name%` isolates execution into three layers connected by lock-free channels and immutable state flows:
+Because Win32 hooks, native window operations, and Swing UI components each enforce strict thread-affinity rules, `%cmd_name%` isolates execution into three layers connected by a shared `KeyCommandMapper`, a single-threaded `SwitcherCoordinator` intent channel, and an immutable `StateFlow<SwitcherUiState>`:
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────┐
 │ 1. Win32 Hook Thread (Dedicated OS Platform Thread, MAX_PRIORITY)    │
 │    • Installs WH_KEYBOARD_LL via Panama FFM upcall stub              │
 │    • Runs GetMessageW() / TranslateMessage() / DispatchMessageW()    │
-│    • Emits HookKeyEvent via non-blocking Channel.trySend()           │
+│    • Maps VK_* -> KeyCommandMapper -> Channel.trySend(SwitcherIntent)│
 └──────────────────────────────────┬───────────────────────────────────┘
-                                   │ Non-blocking Channel.trySend()
+                                   │ Non-blocking Channel<SwitcherIntent>
                                    ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│ 2. Coordinator & Domain Layer (Coroutine Scope / win32Dispatcher)    │
-│    • State machine: HIDDEN <-> QUICK_SWITCH <-> INTERACTIVE_SEARCH   │
-│    • WindowEnumerator + WindowActivator + WindowFilter + IconCache   │
+│ 2. Coordinator & Domain Actor (Single-Threaded win32Dispatcher)      │
+│    • Pure SwitcherReducer: HIDDEN <-> QUICK_SWITCH <-> INTERACTIVE   │
+│    • Executes SwitcherEffect via WindowCatalogPort/WindowControlPort │
 └──────────────────────────────────┬───────────────────────────────────┘
                                    │ StateFlow<SwitcherUiState>
                                    ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │ 3. Presentation Layer (Swing AWT Event Dispatch Thread + FlatLaf)    │
 │    • Undecorated, alwaysOnTop JDialog (SwitcherOverlay)              │
+│    • KeyEvent -> KeyCommandMapper -> SwitcherCoordinator.dispatch()  │
 │    • Direct Graphics2D highlight span & badge cell renderer          │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
 ## State Machine Transitions
 
-`SwitcherStateMachine` maintains an atomic `StateFlow<SwitcherUiState>` across three modes (`HIDDEN`, `QUICK_SWITCH`, and `INTERACTIVE_SEARCH`):
+`SwitcherCoordinator` and `SwitcherReducer` maintain an immutable `StateFlow<SwitcherUiState>` across three modes (`HIDDEN`, `QUICK_SWITCH`, and `INTERACTIVE_SEARCH`):
 
 | Current Mode | Event | Next Mode | Side Effects |
 | :--- | :--- | :--- | :--- |
@@ -84,35 +85,36 @@ Because Win32 hooks, native window operations, and Swing UI components each enfo
 | `QUICK_SWITCH` or `INTERACTIVE_SEARCH` | `Enter` pressed or list item clicked | `HIDDEN` | Activate currently selected `WindowInfo` and hide overlay. |
 | `QUICK_SWITCH` or `INTERACTIVE_SEARCH` | `Esc` pressed or focus lost *(in `INTERACTIVE_SEARCH`)* | `HIDDEN` | Dismiss without switching and hide overlay. |
 
-## Package Layout
+## Multi-Module Reactor Layout
 
 ```text
-src/main/kotlin/com/michibaum/kwswitcher/
-├── Main.kt                         # Entry point, single-instance mutex, theme, coroutines & tray wiring
-├── config/
-│   ├── SwitcherConfig.kt           # Configuration data model (HotkeyConfig, ThemeOption, ignore rules)
-│   ├── ConfigRepository.kt         # Loads/saves %APPDATA%\kwswitcher\config.json
-│   └── ThemeManager.kt             # FlatDarkLaf / FlatLightLaf palettes & Windows OS theme detection
-├── coordinator/
-│   ├── SwitcherMode.kt             # HIDDEN, QUICK_SWITCH, INTERACTIVE_SEARCH
-│   ├── SwitcherUiState.kt          # Immutable UI state snapshot + match highlights + armed kill HWND
-│   └── SwitcherStateMachine.kt     # Pure state transition logic & side-effect callbacks
-├── domain/
-│   ├── WindowInfo.kt               # WindowHandle & WindowInfo (hwnd, title, pid, processName, exePath, zOrder, isMinimized, monitorId)
-│   ├── WindowMatch.kt              # WindowInfo + score + merged character highlight ranges
-│   └── WindowFilter.kt             # Multi-token ranked fuzzy matcher & highlight span calculator
-├── ui/
-│   ├── SwitcherOverlay.kt          # Undecorated FlatLaf JDialog, search field, key & mouse handlers
-│   ├── WindowListCellRenderer.kt   # Direct Graphics2D highlight/truncation renderer & row badges
-│   └── SystemTrayController.kt     # SystemTray icon & menu (Show, Reload Config, Theme, Startup, Quit)
-└── win32/
-    ├── Win32Bindings.kt            # Panama FFM Linker, SymbolLookup, MethodHandles & StructLayouts
-    ├── KeyboardHook.kt             # WH_KEYBOARD_LL upcall stub & dedicated Win32 message pump thread
-    ├── WindowEnumerator.kt         # EnumWindows, DWMWA_CLOAKED, monitor info & ignore-list filtering
-    ├── WindowActivator.kt          # SW_RESTORE, SW_MINIMIZE, WM_CLOSE, TerminateProcess & focus bypass
-    ├── IconExtractor.kt            # HICON -> BufferedImage -> ImageIcon + async LRU cache by exePath
-    ├── SingleInstanceMutex.kt      # CreateMutexW single-instance guard
-    └── StartupRegistry.kt          # HKCU\...\Run registry read/write via advapi32.dll
+kwswitcher/
+├── kwswitcher-core/                                 # Pure JVM/Swing module (zero native access required)
+│   └── src/main/kotlin/com/michibaum/kwswitcher/core/
+│       ├── config/                                  # @Serializable SwitcherConfig, ConfigRepository, ThemeManager
+│       ├── domain/                                  # WindowInfo, WindowMatch, WindowFilter, OverlayConstants
+│       ├── input/                                   # KeyGesture, LogicalKey, KeyCommandMapper
+│       ├── port/                                    # WindowCatalogPort, WindowControlPort, HotkeyHookPort, etc.
+│       ├── coordinator/                             # SwitcherIntent, SwitcherEffect, SwitcherReducer, SwitcherCoordinator
+│       ├── ui/                                      # SwitcherOverlay, WindowListCellRenderer, SystemTrayController
+│       └── sandbox/                                 # SandboxWindowSystem, SyntheticWindowIconPort, fake ports
+├── kwswitcher-win32/                                # JDK 25 Panama FFM Windows backend
+│   └── src/main/kotlin/com/michibaum/kwswitcher/win32/
+│       ├── bindings/                                # PanamaNative, Win32Constants, Win32Structs, *Native holders
+│       ├── diagnostics/Win32ErrorFormatter.kt       # GetLastError + FormatMessageW decoder
+│       ├── Win32HotkeySpec.kt                       # Compiles HotkeyConfig to Win32 VK codes
+│       ├── Win32KeyboardHook.kt                     # HotkeyHookPort + WH_KEYBOARD_LL message pump
+│       ├── Win32WindowEnumerator.kt                 # WindowCatalogPort + DWMWA_CLOAKED + monitor labels
+│       ├── Win32WindowActivator.kt                  # WindowControlPort returning NativeResult
+│       ├── Win32IconExtractor.kt                    # WindowIconPort + async LRU cache by exePath
+│       ├── Win32SingleInstanceMutex.kt              # SingleInstancePort (CreateMutexW)
+│       └── Win32StartupRegistry.kt                  # StartupRegistrationPort (HKCU\...\Run)
+└── kwswitcher-app/                                  # Composition root, CLI modes, SLF4J provider & jpackage
+    └── src/main/kotlin/com/michibaum/kwswitcher/app/
+        ├── Main.kt                                  # Entry point
+        ├── KwSwitcherBootstrap.kt                   # Mode-aware port assembly & lifecycle
+        ├── cli/CliOptions.kt                        # --dev, --no-hook, --sandbox, --pin-overlay, --log-level
+        └── logging/                                 # KwSlf4jProvider, RotatingFileSink, DiagnosticsRingBuffer
 ```
 {ignore-vars="true"}
 
