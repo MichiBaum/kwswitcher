@@ -32,6 +32,7 @@ import com.michibaum.kwswitcher.win32.Win32SingleInstanceMutex
 import com.michibaum.kwswitcher.win32.Win32StartupRegistry
 import com.michibaum.kwswitcher.win32.Win32WindowActivator
 import com.michibaum.kwswitcher.win32.Win32WindowEnumerator
+import com.michibaum.kwswitcher.win32.bindings.PanamaNative
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -40,6 +41,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.swing.Swing
 import java.awt.Desktop
 import java.awt.GraphicsEnvironment
@@ -96,6 +98,7 @@ class RunningAppSession internal constructor(
         configPath = profilePaths.configPath,
         logDirectory = KwLoggingHub.logDirectory,
         activeConfig = activeConfigRef.get(),
+        pinned = coordinator.state.value.pinned,
     )
 
     fun awaitShutdown() {
@@ -114,6 +117,7 @@ class RunningAppSession internal constructor(
         iconPort.close()
         overlay?.dispose()
         singleInstance.close()
+        KwLoggingHub.closeFileSink()
         shutdownLatch.countDown()
     }
 }
@@ -158,6 +162,58 @@ object KwSwitcherBootstrap {
         options: CliOptions,
         enableUi: Boolean = !GraphicsEnvironment.isHeadless(),
         consoleLogging: Boolean = true,
+    ): RunningAppSession? = startInternal(
+        options = options,
+        enableUi = enableUi,
+        consoleLogging = consoleLogging,
+        singleInstanceOverride = null,
+        hookOverride = null,
+    )
+
+    @Suppress("TooGenericExceptionCaught")
+    fun runSelfCheck(
+        options: CliOptions,
+        enableUi: Boolean = !GraphicsEnvironment.isHeadless(),
+        consoleLogging: Boolean = true,
+    ): Boolean {
+        val sandboxOptions = options.copy(
+            mode = RuntimeMode.SANDBOX,
+            installHook = false,
+            openOnStart = false,
+        )
+        val session = start(
+            options = sandboxOptions,
+            enableUi = enableUi,
+            consoleLogging = consoleLogging,
+        ) ?: return false
+
+        return try {
+            session.use { active ->
+                val linkerName = PanamaNative.linker.javaClass.simpleName
+                runBlocking {
+                    active.coordinator.submitAndAwait(SwitcherIntent.SetPinned(pinned = true))
+                    active.coordinator.submitAndAwait(SwitcherIntent.SetPinned(pinned = false))
+                }
+                logger.info {
+                    "Self-check passed (mode=${active.options.mode}, ui=$enableUi, linker=$linkerName)"
+                }
+                true
+            }
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            logger.error(e) { "Self-check failed" }
+            false
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    internal fun startInternal(
+        options: CliOptions,
+        enableUi: Boolean,
+        consoleLogging: Boolean,
+        singleInstanceOverride: SingleInstancePort?,
+        hookOverride: HotkeyHookPort?,
     ): RunningAppSession? {
         val profilePaths = resolveProfilePaths(options)
         KwLoggingHub.configure(
@@ -165,32 +221,42 @@ object KwSwitcherBootstrap {
             logFile = profilePaths.logFilePath,
             consoleEnabled = consoleLogging,
         )
+        for (warning in options.warnings) {
+            logger.warn { "CLI option warning: $warning" }
+        }
         logger.info {
             "Starting Kotlin Switcheroo (mode=${options.mode}, hook=${options.installHook}, " +
                 "pinned=${options.pinOverlay}, config=${profilePaths.configPath})"
         }
 
-        val singleInstance = createSingleInstancePort(options.mode)
+        val singleInstance = singleInstanceOverride ?: createSingleInstancePort(options.mode)
         if (!singleInstance.tryAcquire()) {
             logger.warn { "Exiting because another ${options.mode} instance is already running" }
             singleInstance.close()
+            KwLoggingHub.closeFileSink()
             return null
         }
 
+        var assembledSession: RunningAppSession? = null
         return try {
-            assembleSession(
+            assembledSession = assembleSession(
                 options = options,
                 profilePaths = profilePaths,
                 singleInstance = singleInstance,
                 enableUi = enableUi,
+                hookOverride = hookOverride,
             )
+            assembledSession
         } catch (ce: CancellationException) {
-            singleInstance.close()
             throw ce
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             logger.error(e) { "Fatal error during KwSwitcherBootstrap startup" }
-            singleInstance.close()
             throw e
+        } finally {
+            if (assembledSession == null) {
+                singleInstance.close()
+                KwLoggingHub.closeFileSink()
+            }
         }
     }
 
@@ -200,6 +266,7 @@ object KwSwitcherBootstrap {
         profilePaths: ProfilePaths,
         singleInstance: SingleInstancePort,
         enableUi: Boolean,
+        hookOverride: HotkeyHookPort?,
     ): RunningAppSession? {
         val configRepository = ConfigRepository(
             configPath = profilePaths.configPath,
@@ -226,7 +293,7 @@ object KwSwitcherBootstrap {
             dispatcher = win32Dispatcher,
         )
 
-        val hook = createHotkeyHookPort(
+        val hook = hookOverride ?: createHotkeyHookPort(
             options = options,
             activeConfig = activeConfig,
             coordinator = coordinator,
