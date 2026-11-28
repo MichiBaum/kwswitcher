@@ -6,7 +6,6 @@ import com.michibaum.kwswitcher.core.config.ThemeManager
 import com.michibaum.kwswitcher.core.config.ThemePalette
 import com.michibaum.kwswitcher.core.coordinator.SwitcherCoordinator
 import com.michibaum.kwswitcher.core.coordinator.SwitcherIntent
-import com.michibaum.kwswitcher.core.coordinator.SwitcherMode
 import com.michibaum.kwswitcher.core.coordinator.SwitcherUiState
 import com.michibaum.kwswitcher.core.domain.OverlayConstants
 import com.michibaum.kwswitcher.core.domain.WindowMatch
@@ -64,12 +63,13 @@ class SwitcherOverlay(
         focusTraversalKeysEnabled = false
     }
 
-    private val windowList = object : JList<WindowMatch>(listModel) {
+    internal val windowList = object : JList<WindowMatch>(listModel) {
         override fun getScrollableTracksViewportWidth(): Boolean = true
     }.apply {
         selectionMode = ListSelectionModel.SINGLE_SELECTION
         cellRenderer = renderer
         fixedCellHeight = 40
+        isFocusable = false
         focusTraversalKeysEnabled = false
     }
 
@@ -252,12 +252,7 @@ class SwitcherOverlay(
 
         windowList.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
-                if (e.clickCount >= 1 && windowList.selectedIndex >= 0) {
-                    if (dialog.isVisible) {
-                        dialog.isVisible = false
-                    }
-                    coordinator.dispatch(SwitcherIntent.ConfirmSelection)
-                }
+                handleListMouseClicked(e)
             }
         })
 
@@ -268,6 +263,15 @@ class SwitcherOverlay(
         })
     }
 
+    internal fun handleListMouseClicked(e: MouseEvent) {
+        if (e.clickCount < 1) return
+        if (!SwingUtilities.isLeftMouseButton(e) && e.button != MouseEvent.NOBUTTON) return
+        val idx = windowList.locationToIndex(e.point)
+        if (idx >= 0 && windowList.getCellBounds(idx, idx)?.contains(e.point) == true) {
+            coordinator.dispatch(SwitcherIntent.ConfirmAtIndex(idx))
+        }
+    }
+
     internal fun handleOverlayKeyEvent(e: KeyEvent) {
         val intent = KeyCommandMapper.mapSwingKeyEvent(
             event = e,
@@ -275,19 +279,11 @@ class SwitcherOverlay(
         ) ?: return
 
         e.consume()
-        if (intent is SwitcherIntent.ConfirmSelection || intent is SwitcherIntent.Dismiss) {
-            if (dialog.isVisible) {
-                dialog.isVisible = false
-            }
-        }
         coordinator.dispatch(intent)
     }
 
     internal fun handleWindowLostFocus() {
-        val current = coordinator.state.value
-        if (current.mode == SwitcherMode.INTERACTIVE_SEARCH && !current.pinned) {
-            coordinator.dispatch(SwitcherIntent.Dismiss(fromFocusLoss = true))
-        }
+        coordinator.dispatch(SwitcherIntent.Dismiss(fromFocusLoss = true))
     }
 
     fun dispose() {

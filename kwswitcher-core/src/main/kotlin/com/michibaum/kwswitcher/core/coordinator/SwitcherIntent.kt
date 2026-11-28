@@ -17,6 +17,7 @@ sealed interface SwitcherIntent {
     data object MinimizeSelected : SwitcherIntent
     data object KillSelectedProcess : SwitcherIntent
     data object ConfirmSelection : SwitcherIntent
+    data class ConfirmAtIndex(val index: Int) : SwitcherIntent
     data class Dismiss(val fromFocusLoss: Boolean = false) : SwitcherIntent
     data class SetPinned(val pinned: Boolean) : SwitcherIntent
 }

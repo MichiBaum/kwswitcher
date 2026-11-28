@@ -11,6 +11,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
@@ -35,13 +36,14 @@ class SwitcherCoordinator(
     dispatcher: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(1),
 ) : AutoCloseable {
 
-    private val ownsScope = parentScope == null
     private val actorScope: CoroutineScope = parentScope?.let {
-        CoroutineScope(SupervisorJob(it.coroutineContext[kotlinx.coroutines.Job]) + dispatcher)
+        CoroutineScope(SupervisorJob(it.coroutineContext[Job]) + dispatcher)
     } ?: CoroutineScope(SupervisorJob() + dispatcher)
 
     private val mailbox = Channel<IntentEnvelope>(Channel.UNLIMITED)
     private val _state = MutableStateFlow(SwitcherUiState(pinned = initialPinned))
+    private val hookBindLock = Any()
+    private var hookCollectorJob: Job? = null
 
     /**
      * Read-only state stream observed by the Swing overlay and global hook snapshot provider.
@@ -53,10 +55,22 @@ class SwitcherCoordinator(
 
     init {
         actorScope.launch {
-            for (envelope in mailbox) {
-                val updated = handleIntentSafely(envelope.intent)
-                envelope.completion?.complete(updated)
+            var currentEnvelope: IntentEnvelope? = null
+            try {
+                for (envelope in mailbox) {
+                    currentEnvelope = envelope
+                    val updated = handleIntentSafely(envelope.intent)
+                    envelope.completion?.complete(updated)
+                    currentEnvelope = null
+                }
+            } finally {
+                currentEnvelope?.completion?.complete(_state.value)
+                drainPendingEnvelopes()
             }
+        }
+        actorScope.coroutineContext[Job]?.invokeOnCompletion {
+            mailbox.close()
+            drainPendingEnvelopes()
         }
     }
 
@@ -65,10 +79,13 @@ class SwitcherCoordinator(
      * and [SwitcherEffect.AcknowledgeHotkey] notifies [HotkeyHookPort.acknowledgeHotkeyHandled].
      */
     fun bindHook(hookPort: HotkeyHookPort) {
-        attachedHook = hookPort
-        actorScope.launch {
-            hookPort.events.collect { intent ->
-                dispatch(intent)
+        synchronized(hookBindLock) {
+            attachedHook = hookPort
+            hookCollectorJob?.cancel()
+            hookCollectorJob = actorScope.launch {
+                hookPort.events.collect { intent ->
+                    dispatch(intent)
+                }
             }
         }
     }
@@ -161,9 +178,19 @@ class SwitcherCoordinator(
     }
 
     override fun close() {
+        synchronized(hookBindLock) {
+            hookCollectorJob?.cancel()
+            hookCollectorJob = null
+        }
         mailbox.close()
-        if (ownsScope) {
-            actorScope.cancel()
+        actorScope.cancel()
+        drainPendingEnvelopes()
+    }
+
+    private fun drainPendingEnvelopes() {
+        while (true) {
+            val pending = mailbox.tryReceive().getOrNull() ?: break
+            pending.completion?.complete(_state.value)
         }
     }
 

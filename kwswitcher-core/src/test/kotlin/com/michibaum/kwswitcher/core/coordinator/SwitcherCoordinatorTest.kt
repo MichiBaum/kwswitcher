@@ -6,9 +6,15 @@ import com.michibaum.kwswitcher.core.port.NativeResult
 import com.michibaum.kwswitcher.core.port.WindowCatalogPort
 import com.michibaum.kwswitcher.core.port.WindowControlPort
 import com.michibaum.kwswitcher.core.sandbox.NoOpHotkeyHookPort
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import java.awt.Rectangle
 import java.util.concurrent.atomic.AtomicInteger
@@ -205,5 +211,100 @@ class SwitcherCoordinatorTest {
         assertEquals(1, hook.acknowledgeCount.get())
         assertEquals(SwitcherMode.QUICK_SWITCH, coordinator.state.value.mode)
         assertTrue(coordinator.state.value.allWindows.isEmpty())
+    }
+
+    @Test
+    fun `ConfirmAtIndex activates targeted window while out-of-bounds indices safely no-op`() = runTest {
+        val control = RecordingControlPort()
+        val coordinator = createCoordinator(controlPort = control)
+
+        // ConfirmAtIndex while HIDDEN is a safe no-op
+        val whileHidden = coordinator.submitAndAwait(SwitcherIntent.ConfirmAtIndex(0))
+        assertEquals(SwitcherMode.HIDDEN, whileHidden.mode)
+        assertTrue(control.activated.isEmpty())
+
+        val opened = coordinator.submitAndAwait(SwitcherIntent.ShowInteractive)
+        assertEquals(0, opened.selectedIndex)
+
+        // Out-of-bounds indices while visible leave switcher open and do not activate anything
+        val negativeIdx = coordinator.submitAndAwait(SwitcherIntent.ConfirmAtIndex(-1))
+        assertTrue(negativeIdx.isVisible)
+        assertTrue(control.activated.isEmpty())
+
+        val overflowIdx = coordinator.submitAndAwait(SwitcherIntent.ConfirmAtIndex(99))
+        assertTrue(overflowIdx.isVisible)
+        assertTrue(control.activated.isEmpty())
+
+        // Valid index 2 activates windows[2] even though selectedIndex is 0
+        val confirmed = coordinator.submitAndAwait(SwitcherIntent.ConfirmAtIndex(2))
+        assertEquals(SwitcherMode.HIDDEN, confirmed.mode)
+        assertEquals(listOf(windows[2].hwnd), control.activated)
+    }
+
+    @Test
+    fun `bindHook cancels prior collector on rebind so events are not duplicated or leaked`() = runTest {
+        val hook1 = NoOpHotkeyHookPort()
+        val hook2 = NoOpHotkeyHookPort()
+        val coordinator = createCoordinator()
+
+        coordinator.bindHook(hook1)
+        runCurrent()
+
+        // Rebind to hook2, then bind hook2 a second time to verify deduplication
+        coordinator.bindHook(hook2)
+        coordinator.bindHook(hook2)
+        runCurrent()
+
+        // Emissions on old hook1 are ignored
+        hook1.emit(SwitcherIntent.TriggerHotkey(reverse = false))
+        testScheduler.advanceUntilIdle()
+        assertEquals(SwitcherMode.HIDDEN, coordinator.state.value.mode)
+        assertEquals(0, hook1.acknowledgeCount.get())
+
+        // Emissions on active hook2 are processed once (selectedIndex = 1, not cycled twice to 2)
+        hook2.emit(SwitcherIntent.TriggerHotkey(reverse = false))
+        testScheduler.advanceUntilIdle()
+        assertEquals(SwitcherMode.QUICK_SWITCH, coordinator.state.value.mode)
+        assertEquals(1, coordinator.state.value.selectedIndex)
+        assertEquals(1, hook2.acknowledgeCount.get())
+    }
+
+    @Test
+    fun `close cancels child actorScope without cancelling external parentScope and completes pending submitAndAwait`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val externalParentScope = CoroutineScope(SupervisorJob() + dispatcher)
+        val hook = NoOpHotkeyHookPort()
+        val catalog = object : WindowCatalogPort {
+            override fun enumerateOpenWindows(): List<WindowInfo> = windows
+            override fun getActiveMonitorWorkArea(): Rectangle? = null
+        }
+        val coordinator = SwitcherCoordinator(
+            windowCatalog = catalog,
+            windowControl = RecordingControlPort(),
+            parentScope = externalParentScope,
+            dispatcher = dispatcher,
+        )
+        coordinator.bindHook(hook)
+
+        // Enqueue two submitAndAwait calls eagerly while actor dispatcher has not yet run
+        val unconfined = UnconfinedTestDispatcher(testScheduler)
+        val waiter1 = async(unconfined) { coordinator.submitAndAwait(SwitcherIntent.ShowInteractive) }
+        val waiter2 = async(unconfined) { coordinator.submitAndAwait(SwitcherIntent.SetPinned(pinned = true)) }
+        assertFalse(waiter1.isCompleted)
+        assertFalse(waiter2.isCompleted)
+
+        coordinator.close()
+        testScheduler.advanceUntilIdle()
+
+        assertTrue(externalParentScope.isActive, "Closing coordinator must not cancel external parentScope")
+        assertTrue(waiter1.isCompleted)
+        assertTrue(waiter2.isCompleted)
+        assertEquals(SwitcherMode.HIDDEN, waiter1.await().mode)
+        assertFalse(waiter2.await().pinned)
+
+        // Hook emissions after close are ignored
+        hook.emit(SwitcherIntent.TriggerHotkey(reverse = false))
+        testScheduler.advanceUntilIdle()
+        assertEquals(0, hook.acknowledgeCount.get())
     }
 }
