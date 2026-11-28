@@ -5,17 +5,26 @@ import com.michibaum.kwswitcher.app.cli.LogLevel
 import com.michibaum.kwswitcher.app.cli.RuntimeMode
 import com.michibaum.kwswitcher.core.config.SwitcherConfig
 import io.github.oshai.kotlinlogging.KotlinLogging
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.io.TempDir
 import org.slf4j.spi.SLF4JServiceProvider
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.ServiceLoader
 import kotlin.io.path.exists
 import kotlin.io.path.readText
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class KwSlf4jProviderTest {
+
+    @AfterEach
+    fun tearDown() {
+        KwLoggingHub.reset()
+    }
 
     @Test
     fun `ServiceLoader discovers KwSlf4jProvider and KotlinLogging writes to ring buffer and rotating file`(
@@ -67,5 +76,54 @@ class KwSlf4jProviderTest {
         )
         assertTrue(report.contains("Runtime Mode   : DEV"))
         assertTrue(report.contains("entry-4-delta-error"))
+    }
+
+    @Test
+    fun `DiagnosticsRingBuffer clamps non-positive maxEntries and formats live pinned flag`(
+        @TempDir tempDir: Path,
+    ) {
+        val zeroCap = DiagnosticsRingBuffer(maxEntries = 0)
+        assertEquals(1, zeroCap.capacity)
+        zeroCap.append("line-1")
+        zeroCap.append("line-2")
+        assertEquals(listOf("line-2"), zeroCap.snapshot())
+
+        val negativeCap = DiagnosticsRingBuffer(maxEntries = -5)
+        assertEquals(1, negativeCap.capacity)
+        negativeCap.append("first")
+        negativeCap.append("second")
+        assertEquals(listOf("second"), negativeCap.snapshot())
+
+        val report = negativeCap.buildDiagnosticsReport(
+            options = CliOptions(mode = RuntimeMode.DEV, pinOverlay = false),
+            configPath = tempDir.resolve("config.json"),
+            logDirectory = null,
+            activeConfig = SwitcherConfig(),
+            pinned = true,
+        )
+        assertTrue(report.contains("Overlay Pinned : true"))
+        assertTrue(report.contains("--- Recent Log Entries (1 / 1) ---"))
+    }
+
+    @Test
+    fun `RotatingFileSink rotates persistent writer cleanly and releases Windows file locks on close`(
+        @TempDir tempDir: Path,
+    ) {
+        val logFile = tempDir.resolve("persistent.log")
+        RotatingFileSink(logFile = logFile, maxBytes = 80L).use { sink ->
+            sink.writeLine("alpha-0123456789-0123456789-0123456789")
+            sink.writeLine("bravo-0123456789-0123456789-0123456789")
+            sink.writeLine("charlie-0123456789-0123456789-0123456789")
+            assertTrue(sink.backupFile.exists())
+            assertTrue(sink.logFile.exists())
+        }
+
+        // After close(), Windows NTFS handle must be released so Files.delete succeeds immediately
+        Files.delete(logFile)
+        assertFalse(logFile.exists())
+
+        KwLoggingHub.reset()
+        assertNull(KwLoggingHub.fileSink)
+        assertEquals(DiagnosticsRingBuffer.DEFAULT_CAPACITY, KwLoggingHub.ringBuffer.capacity)
     }
 }

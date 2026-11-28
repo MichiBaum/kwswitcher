@@ -25,6 +25,8 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object KwLoggingHub {
 
+    private val configLock = Any()
+
     private val timestampFormatter: DateTimeFormatter =
         DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS").withZone(ZoneId.systemDefault())
 
@@ -54,10 +56,33 @@ object KwLoggingHub {
         maxFileBytes: Long = RotatingFileSink.DEFAULT_MAX_FILE_BYTES,
         ringCapacity: Int = DiagnosticsRingBuffer.DEFAULT_CAPACITY,
     ) {
-        this.minLevel = minLevel
-        this.consoleEnabled = consoleEnabled
-        this.ringBuffer = DiagnosticsRingBuffer(maxEntries = ringCapacity)
-        this.fileSink = logFile?.let { RotatingFileSink(logFile = it, maxBytes = maxFileBytes) }
+        val previousSink: RotatingFileSink?
+        synchronized(configLock) {
+            previousSink = this.fileSink
+            this.minLevel = minLevel
+            this.consoleEnabled = consoleEnabled
+            this.ringBuffer = DiagnosticsRingBuffer(maxEntries = ringCapacity)
+            this.fileSink = logFile?.let { RotatingFileSink(logFile = it, maxBytes = maxFileBytes) }
+        }
+        previousSink?.close()
+    }
+
+    fun closeFileSink() {
+        val previousSink: RotatingFileSink?
+        synchronized(configLock) {
+            previousSink = this.fileSink
+            this.fileSink = null
+        }
+        previousSink?.close()
+    }
+
+    fun reset() {
+        configure(
+            minLevel = LogLevel.INFO,
+            logFile = null,
+            consoleEnabled = true,
+            ringCapacity = DiagnosticsRingBuffer.DEFAULT_CAPACITY,
+        )
     }
 
     internal fun isEnabled(level: LogLevel): Boolean = level.severity >= minLevel.severity

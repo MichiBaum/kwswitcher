@@ -9,8 +9,15 @@ import kotlin.system.exitProcess
 fun main(args: Array<String>) {
     val options = CliOptions.parse(args)
     if (options.showHelp) {
+        for (warning in options.warnings) {
+            System.err.println("Warning: $warning")
+        }
         println(CliOptions.usageText())
         return
+    }
+    if (options.selfCheck) {
+        val ok = KwSwitcherBootstrap.runSelfCheck(options = options)
+        exitProcess(if (ok) 0 else 1)
     }
 
     val session = KwSwitcherBootstrap.start(options = options) ?: exitProcess(0)

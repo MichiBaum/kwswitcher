@@ -64,5 +64,38 @@ class CliOptionsTest {
         val help = CliOptions.parse(arrayOf("--help")) { null }
         assertTrue(help.showHelp)
         assertTrue(CliOptions.usageText().contains("--sandbox"))
+        assertTrue(CliOptions.usageText().contains("--self-check"))
+    }
+
+    @Test
+    fun `self-check flag forces safe SANDBOX profile without opening visible window by default`() {
+        val selfCheck = CliOptions.parse(arrayOf("--self-check")) { null }
+        assertTrue(selfCheck.selfCheck)
+        assertEquals(RuntimeMode.SANDBOX, selfCheck.mode)
+        assertFalse(selfCheck.installHook)
+        assertFalse(selfCheck.openOnStart)
+        assertTrue(selfCheck.warnings.isEmpty())
+
+        val fromProp = CliOptions.parse(emptyArray()) { key ->
+            if (key == CliOptions.PROP_SELF_CHECK) "true" else null
+        }
+        assertTrue(fromProp.selfCheck)
+        assertEquals(RuntimeMode.SANDBOX, fromProp.mode)
+    }
+
+    @Test
+    fun `unknown flags invalid log levels and missing option values populate actionable warnings`() {
+        val parsed = CliOptions.parse(
+            arrayOf("--pin", "--log-level", "VERBOSE", "--config"),
+        ) { null }
+        assertEquals(3, parsed.warnings.size)
+        assertTrue(parsed.warnings[0].contains("--pin"))
+        assertTrue(parsed.warnings[1].contains("VERBOSE"))
+        assertTrue(parsed.warnings[2].contains("--config"))
+
+        val equalsErrors = CliOptions.parse(
+            arrayOf("--config=", "--log-level=LOUD", "--log-level"),
+        ) { null }
+        assertEquals(3, equalsErrors.warnings.size)
     }
 }

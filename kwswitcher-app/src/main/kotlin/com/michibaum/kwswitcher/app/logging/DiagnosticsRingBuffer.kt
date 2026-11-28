@@ -7,13 +7,14 @@ import java.nio.file.Path
 /**
  * Thread-safe bounded ring buffer retaining recent formatted log entries for tray diagnostics (`DX-5`).
  */
-class DiagnosticsRingBuffer(val maxEntries: Int = DEFAULT_CAPACITY) {
+class DiagnosticsRingBuffer(maxEntries: Int = DEFAULT_CAPACITY) {
+    val capacity: Int = maxEntries.coerceAtLeast(1)
     private val lock = Any()
-    private val entries = ArrayDeque<String>(maxEntries.coerceAtLeast(1))
+    private val entries = ArrayDeque<String>(capacity)
 
     fun append(formattedLine: String) {
         synchronized(lock) {
-            if (entries.size >= maxEntries) {
+            if (entries.size >= capacity) {
                 entries.removeFirst()
             }
             entries.addLast(formattedLine)
@@ -38,30 +39,34 @@ class DiagnosticsRingBuffer(val maxEntries: Int = DEFAULT_CAPACITY) {
         configPath: Path,
         logDirectory: Path?,
         activeConfig: SwitcherConfig,
-    ): String = buildString {
-        appendLine("=== Kotlin Switcheroo (kwswitcher) Diagnostics ===")
-        appendLine("Runtime Mode   : ${options.mode}")
-        appendLine("Hook Installed : ${options.installHook}")
-        appendLine("Overlay Pinned : ${options.pinOverlay}")
-        appendLine("Log Level      : ${options.logLevel}")
-        appendLine("Java Runtime   : ${System.getProperty("java.version")} (${System.getProperty("java.vm.name")})")
-        appendLine(
-            "OS             : ${System.getProperty(
-                "os.name",
-            )} ${System.getProperty("os.version")} (${System.getProperty("os.arch")})",
-        )
-        appendLine("PID            : ${ProcessHandle.current().pid()}")
-        appendLine("Config Path    : $configPath")
-        appendLine("Log Directory  : ${logDirectory ?: "(disabled)"}")
-        appendLine(
-            "Active Hotkey  : ${activeConfig.hotkey.modifier} + ${activeConfig.hotkey.triggerKey} " +
-                "(reverse=${activeConfig.hotkey.reverseModifier})",
-        )
-        appendLine("Active Theme   : ${activeConfig.theme}")
-        appendLine()
-        appendLine("--- Recent Log Entries (${snapshot().size} / $maxEntries) ---")
-        for (line in snapshot()) {
-            appendLine(line)
+        pinned: Boolean = options.pinOverlay,
+    ): String {
+        val lines = snapshot()
+        return buildString {
+            appendLine("=== Kotlin Switcheroo (kwswitcher) Diagnostics ===")
+            appendLine("Runtime Mode   : ${options.mode}")
+            appendLine("Hook Installed : ${options.installHook}")
+            appendLine("Overlay Pinned : $pinned")
+            appendLine("Log Level      : ${options.logLevel}")
+            appendLine("Java Runtime   : ${System.getProperty("java.version")} (${System.getProperty("java.vm.name")})")
+            appendLine(
+                "OS             : ${System.getProperty(
+                    "os.name",
+                )} ${System.getProperty("os.version")} (${System.getProperty("os.arch")})",
+            )
+            appendLine("PID            : ${ProcessHandle.current().pid()}")
+            appendLine("Config Path    : $configPath")
+            appendLine("Log Directory  : ${logDirectory ?: "(disabled)"}")
+            appendLine(
+                "Active Hotkey  : ${activeConfig.hotkey.modifier} + ${activeConfig.hotkey.triggerKey} " +
+                    "(reverse=${activeConfig.hotkey.reverseModifier})",
+            )
+            appendLine("Active Theme   : ${activeConfig.theme}")
+            appendLine()
+            appendLine("--- Recent Log Entries (${lines.size} / $capacity) ---")
+            for (line in lines) {
+                appendLine(line)
+            }
         }
     }
 

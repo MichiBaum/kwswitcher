@@ -50,6 +50,8 @@ data class CliOptions(
     val configPath: Path? = null,
     val logLevel: LogLevel = LogLevel.INFO,
     val showHelp: Boolean = false,
+    val selfCheck: Boolean = false,
+    val warnings: List<String> = emptyList(),
 ) {
     companion object {
         const val PROP_MODE = "kwswitcher.mode"
@@ -58,6 +60,7 @@ data class CliOptions(
         const val PROP_OPEN_ON_START = "kwswitcher.openOnStart"
         const val PROP_CONFIG = "kwswitcher.config"
         const val PROP_LOG_LEVEL = "kwswitcher.logLevel"
+        const val PROP_SELF_CHECK = "kwswitcher.selfCheck"
 
         /**
          * Parses CLI [args] combined with optional system-property fallbacks ([propertyLookup]).
@@ -71,6 +74,7 @@ data class CliOptions(
                 openOnStart = propertyLookup(PROP_OPEN_ON_START)?.toBooleanStrictOrNull(),
                 configPath = propertyLookup(PROP_CONFIG)?.takeIf(String::isNotBlank)?.let(::Path),
                 logLevel = LogLevel.parseOrNull(propertyLookup(PROP_LOG_LEVEL)),
+                selfCheck = propertyLookup(PROP_SELF_CHECK)?.toBooleanStrictOrNull() == true,
             )
 
             var index = 0
@@ -78,13 +82,17 @@ data class CliOptions(
                 index = consumeArg(args = args, index = index, state = state)
             }
 
-            val resolvedMode = state.mode ?: RuntimeMode.PRODUCTION
+            val resolvedMode = if (state.selfCheck) {
+                RuntimeMode.SANDBOX
+            } else {
+                state.mode ?: RuntimeMode.PRODUCTION
+            }
             val resolvedInstallHook = when {
-                state.noHook -> false
+                state.selfCheck || state.noHook -> false
                 resolvedMode == RuntimeMode.SANDBOX -> false
                 else -> true
             }
-            val resolvedOpenOnStart = state.openOnStart ?: (resolvedMode == RuntimeMode.SANDBOX)
+            val resolvedOpenOnStart = state.openOnStart ?: (!state.selfCheck && resolvedMode == RuntimeMode.SANDBOX)
             val resolvedLogLevel = state.logLevel ?: when (resolvedMode) {
                 RuntimeMode.PRODUCTION -> LogLevel.INFO
                 RuntimeMode.DEV, RuntimeMode.SANDBOX -> LogLevel.DEBUG
@@ -98,6 +106,8 @@ data class CliOptions(
                 configPath = state.configPath,
                 logLevel = resolvedLogLevel,
                 showHelp = state.showHelp,
+                selfCheck = state.selfCheck,
+                warnings = state.warnings.toList(),
             )
         }
 
@@ -129,33 +139,78 @@ data class CliOptions(
                     index + 1
                 }
 
+                token == "--self-check" -> {
+                    state.selfCheck = true
+                    index + 1
+                }
+
                 token == "--help" || token == "-h" -> {
                     state.showHelp = true
                     index + 1
                 }
 
-                token == "--config" && index + 1 < args.size -> {
-                    state.configPath = Path(args[index + 1])
-                    index + 2
-                }
+                token == "--config" || token.startsWith("--config=") ->
+                    consumeConfigArg(args = args, index = index, token = token, state = state)
 
-                token.startsWith("--config=") -> {
-                    state.configPath = Path(token.removePrefix("--config="))
+                token == "--log-level" || token.startsWith("--log-level=") ->
+                    consumeLogLevelArg(args = args, index = index, token = token, state = state)
+
+                else -> {
+                    if (token.isNotEmpty()) {
+                        state.warnings.add("Unknown CLI option '$token' (run with --help to see supported flags)")
+                    }
                     index + 1
                 }
-
-                token == "--log-level" && index + 1 < args.size -> {
-                    LogLevel.parseOrNull(args[index + 1])?.let { state.logLevel = it }
-                    index + 2
-                }
-
-                token.startsWith("--log-level=") -> {
-                    LogLevel.parseOrNull(token.removePrefix("--log-level="))?.let { state.logLevel = it }
-                    index + 1
-                }
-
-                else -> index + 1
             }
+        }
+
+        private fun consumeConfigArg(args: Array<String>, index: Int, token: String, state: MutableParseState): Int {
+            if (token.startsWith("--config=")) {
+                val rawPath = token.removePrefix("--config=").trim()
+                if (rawPath.isEmpty()) {
+                    state.warnings.add("Missing path argument in '$token'")
+                } else {
+                    state.configPath = Path(rawPath)
+                }
+                return index + 1
+            }
+            if (index + 1 >= args.size || args[index + 1].isBlank()) {
+                state.warnings.add("Missing path argument for '--config'")
+                return index + 1
+            }
+            state.configPath = Path(args[index + 1].trim())
+            return index + 2
+        }
+
+        private fun consumeLogLevelArg(args: Array<String>, index: Int, token: String, state: MutableParseState): Int {
+            if (token.startsWith("--log-level=")) {
+                val rawLevel = token.removePrefix("--log-level=").trim()
+                val parsed = LogLevel.parseOrNull(rawLevel)
+                if (parsed != null) {
+                    state.logLevel = parsed
+                } else {
+                    state.warnings.add(
+                        "Invalid log level '$rawLevel' in '$token' (expected TRACE, DEBUG, INFO, WARN, ERROR)",
+                    )
+                }
+                return index + 1
+            }
+            if (index + 1 >= args.size) {
+                state.warnings.add(
+                    "Missing level argument for '--log-level' (expected TRACE, DEBUG, INFO, WARN, ERROR)",
+                )
+                return index + 1
+            }
+            val rawLevel = args[index + 1].trim()
+            val parsed = LogLevel.parseOrNull(rawLevel)
+            if (parsed != null) {
+                state.logLevel = parsed
+            } else {
+                state.warnings.add(
+                    "Invalid log level '$rawLevel' for '--log-level' (expected TRACE, DEBUG, INFO, WARN, ERROR)",
+                )
+            }
+            return index + 2
         }
 
         fun usageText(): String = """
@@ -167,6 +222,7 @@ data class CliOptions(
               --open-on-start       Show the switcher overlay immediately on startup
               --config <path>       Override path to config.json
               --log-level <level>   Set log verbosity: TRACE, DEBUG, INFO, WARN, ERROR
+              --self-check          Boot sandbox subsystems and Panama FFM runtime, verify linkage, and exit 0
               --help, -h            Print this help message
         """.trimIndent()
 
@@ -178,6 +234,8 @@ data class CliOptions(
             var configPath: Path? = null,
             var logLevel: LogLevel? = null,
             var showHelp: Boolean = false,
+            var selfCheck: Boolean = false,
+            val warnings: MutableList<String> = mutableListOf(),
         )
     }
 }
