@@ -33,19 +33,21 @@ object Win32ErrorFormatter {
         }
     }
 
-    fun describeLastError(operation: String, fallbackDetail: String = ""): NativeResult.Failed {
-        val code = lastErrorCode()
-        val detail = if (code != 0) {
-            formatErrorCode(code)
+    fun describeError(operation: String, errorCode: Int, fallbackDetail: String = ""): NativeResult.Failed {
+        val detail = if (errorCode != 0) {
+            formatErrorCode(errorCode)
         } else {
             fallbackDetail.ifBlank { "Win32 call returned failure with GetLastError=0" }
         }
         return NativeResult.Failed(
             operation = operation,
-            errorCode = code,
+            errorCode = errorCode,
             detail = detail,
         )
     }
+
+    fun describeLastError(operation: String, fallbackDetail: String = ""): NativeResult.Failed =
+        describeError(operation = operation, errorCode = lastErrorCode(), fallbackDetail = fallbackDetail)
 
     private fun querySystemMessage(errorCode: Int): String {
         Arena.ofConfined().use { arena ->

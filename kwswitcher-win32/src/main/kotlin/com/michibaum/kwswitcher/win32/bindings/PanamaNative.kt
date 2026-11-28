@@ -3,10 +3,14 @@ package com.michibaum.kwswitcher.win32.bindings
 import java.lang.foreign.Arena
 import java.lang.foreign.FunctionDescriptor
 import java.lang.foreign.Linker
+import java.lang.foreign.MemoryLayout
 import java.lang.foreign.MemorySegment
+import java.lang.foreign.StructLayout
 import java.lang.foreign.SymbolLookup
 import java.lang.foreign.ValueLayout
 import java.lang.invoke.MethodHandle
+import java.lang.invoke.MethodHandles
+import java.lang.invoke.VarHandle
 
 /**
  * Shared Project Panama (`java.lang.foreign`) linker, lazy Win32 DLL [SymbolLookup]s,
@@ -20,12 +24,30 @@ object PanamaNative {
     val globalArena: Arena
         get() = LinkerHolder.globalArena
 
+    internal val CAPTURE_STATE_LAYOUT: StructLayout
+        get() = CaptureStateHolder.layout
+
     internal fun downcall(lookup: SymbolLookup, name: String, descriptor: FunctionDescriptor): MethodHandle {
         val symbol: MemorySegment = lookup.find(name).orElseThrow {
             IllegalStateException("Win32 symbol not found: $name")
         }
         return LinkerHolder.linker.downcallHandle(symbol, descriptor)
     }
+
+    internal fun downcallCapturingLastError(
+        lookup: SymbolLookup,
+        name: String,
+        descriptor: FunctionDescriptor,
+    ): MethodHandle {
+        val symbol: MemorySegment = lookup.find(name).orElseThrow {
+            IllegalStateException("Win32 symbol not found: $name")
+        }
+        return LinkerHolder.linker.downcallHandle(symbol, descriptor, CaptureStateHolder.captureOption)
+    }
+
+    internal fun Arena.allocateCaptureState(): MemorySegment = allocate(CaptureStateHolder.layout)
+
+    internal fun MemorySegment.readCapturedLastError(): Int = CaptureStateHolder.lastErrorHandle.get(this) as Int
 
     /**
      * Allocates a null-terminated UTF-16 (`WCHAR*` / `LPWSTR`) string in [this] [Arena].
@@ -66,6 +88,21 @@ object PanamaNative {
 
         @JvmField
         val globalArena: Arena = Arena.global()
+    }
+
+    private object CaptureStateHolder {
+        @JvmField
+        val captureOption: Linker.Option = Linker.Option.captureCallState("GetLastError")
+
+        @JvmField
+        val layout: StructLayout = Linker.Option.captureStateLayout()
+
+        @JvmField
+        val lastErrorHandle: VarHandle = MethodHandles.insertCoordinates(
+            layout.varHandle(MemoryLayout.PathElement.groupElement("GetLastError")),
+            1,
+            0L,
+        )
     }
 
     internal object Kernel32Lib {

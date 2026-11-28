@@ -6,7 +6,9 @@ import com.michibaum.kwswitcher.core.port.NativeResult
 import com.michibaum.kwswitcher.core.port.WindowControlPort
 import com.michibaum.kwswitcher.win32.bindings.HookNative
 import com.michibaum.kwswitcher.win32.bindings.MutexNative
+import com.michibaum.kwswitcher.win32.bindings.PanamaNative.allocateCaptureState
 import com.michibaum.kwswitcher.win32.bindings.PanamaNative.allocateWideString
+import com.michibaum.kwswitcher.win32.bindings.PanamaNative.readCapturedLastError
 import com.michibaum.kwswitcher.win32.bindings.Win32Constants
 import com.michibaum.kwswitcher.win32.bindings.Win32Structs
 import com.michibaum.kwswitcher.win32.bindings.WindowControlNative
@@ -60,14 +62,16 @@ class Win32WindowActivator : WindowControlPort {
                 ) != 0
 
             try {
+                val captureState = arena.allocateCaptureState()
                 sendZeroEffectUnlockKeyTap(arena)
                 WindowControlNative.BringWindowToTop.invokeExact(targetHwnd) as Int
-                val focused = WindowControlNative.SetForegroundWindow.invokeExact(targetHwnd) as Int
+                val focused = WindowControlNative.SetForegroundWindow.invokeExact(captureState, targetHwnd) as Int
                 return if (focused != 0) {
                     NativeResult.Ok
                 } else {
-                    val failure = Win32ErrorFormatter.describeLastError(
+                    val failure = Win32ErrorFormatter.describeError(
                         operation = "SetForegroundWindow(hwnd=${handle.value})",
+                        errorCode = captureState.readCapturedLastError(),
                         fallbackDetail = "SetForegroundWindow returned FALSE",
                     )
                     logger.debug { "Window activation rejected for hwnd=${handle.value}: ${failure.detail}" }
@@ -108,18 +112,25 @@ class Win32WindowActivator : WindowControlPort {
             return NativeResult.Failed(operation = "closeGracefully", detail = "Invalid zero WindowHandle")
         }
         val targetHwnd = MemorySegment.ofAddress(handle.value)
-        val posted = WindowControlNative.PostMessageW.invokeExact(
-            targetHwnd,
-            Win32Constants.WM_CLOSE,
-            0L,
-            0L,
-        ) as Int
-        return if (posted != 0) {
-            NativeResult.Ok
-        } else {
-            val failure = Win32ErrorFormatter.describeLastError("PostMessageW(WM_CLOSE, hwnd=${handle.value})")
-            logger.warn { "Failed posting WM_CLOSE to hwnd=${handle.value}: ${failure.detail}" }
-            failure
+        Arena.ofConfined().use { arena ->
+            val captureState = arena.allocateCaptureState()
+            val posted = WindowControlNative.PostMessageW.invokeExact(
+                captureState,
+                targetHwnd,
+                Win32Constants.WM_CLOSE,
+                0L,
+                0L,
+            ) as Int
+            return if (posted != 0) {
+                NativeResult.Ok
+            } else {
+                val failure = Win32ErrorFormatter.describeError(
+                    operation = "PostMessageW(WM_CLOSE, hwnd=${handle.value})",
+                    errorCode = captureState.readCapturedLastError(),
+                )
+                logger.warn { "Failed posting WM_CLOSE to hwnd=${handle.value}: ${failure.detail}" }
+                failure
+            }
         }
     }
 
@@ -142,28 +153,38 @@ class Win32WindowActivator : WindowControlPort {
         if (pid <= 0) {
             return NativeResult.Failed(operation = "terminateProcess", detail = "Invalid non-positive PID $pid")
         }
-        val processHandle = WindowEnumNative.OpenProcess.invokeExact(
-            Win32Constants.PROCESS_TERMINATE,
-            0,
-            pid,
-        ) as MemorySegment
-        if (processHandle == MemorySegment.NULL) {
-            val failure = Win32ErrorFormatter.describeLastError("OpenProcess(PROCESS_TERMINATE, pid=$pid)")
-            logger.warn { "Cannot open PID $pid for termination: ${failure.detail}" }
-            return failure
-        }
-        try {
-            val result = WindowControlNative.TerminateProcess.invokeExact(processHandle, 1) as Int
-            return if (result != 0) {
-                logger.info { "Terminated process PID $pid" }
-                NativeResult.Ok
-            } else {
-                val failure = Win32ErrorFormatter.describeLastError("TerminateProcess(pid=$pid)")
-                logger.warn { "TerminateProcess failed for PID $pid: ${failure.detail}" }
-                failure
+        Arena.ofConfined().use { arena ->
+            val captureState = arena.allocateCaptureState()
+            val processHandle = WindowEnumNative.OpenProcess.invokeExact(
+                captureState,
+                Win32Constants.PROCESS_TERMINATE,
+                0,
+                pid,
+            ) as MemorySegment
+            if (processHandle == MemorySegment.NULL) {
+                val failure = Win32ErrorFormatter.describeError(
+                    operation = "OpenProcess(PROCESS_TERMINATE, pid=$pid)",
+                    errorCode = captureState.readCapturedLastError(),
+                )
+                logger.warn { "Cannot open PID $pid for termination: ${failure.detail}" }
+                return failure
             }
-        } finally {
-            MutexNative.CloseHandle.invokeExact(processHandle) as Int
+            try {
+                val result = WindowControlNative.TerminateProcess.invokeExact(captureState, processHandle, 1) as Int
+                return if (result != 0) {
+                    logger.info { "Terminated process PID $pid" }
+                    NativeResult.Ok
+                } else {
+                    val failure = Win32ErrorFormatter.describeError(
+                        operation = "TerminateProcess(pid=$pid)",
+                        errorCode = captureState.readCapturedLastError(),
+                    )
+                    logger.warn { "TerminateProcess failed for PID $pid: ${failure.detail}" }
+                    failure
+                }
+            } finally {
+                MutexNative.CloseHandle.invokeExact(processHandle) as Int
+            }
         }
     }
 

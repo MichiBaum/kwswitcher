@@ -9,7 +9,7 @@ import java.lang.invoke.MethodHandle
  */
 internal object WindowControlNative {
     @JvmField
-    val SetForegroundWindow: MethodHandle = PanamaNative.downcall(
+    val SetForegroundWindow: MethodHandle = PanamaNative.downcallCapturingLastError(
         lookup = PanamaNative.User32Lib.lookup,
         name = "SetForegroundWindow",
         descriptor = FunctionDescriptor.of(
@@ -64,7 +64,7 @@ internal object WindowControlNative {
     )
 
     @JvmField
-    val PostMessageW: MethodHandle = PanamaNative.downcall(
+    val PostMessageW: MethodHandle = PanamaNative.downcallCapturingLastError(
         lookup = PanamaNative.User32Lib.lookup,
         name = "PostMessageW",
         descriptor = FunctionDescriptor.of(
@@ -77,7 +77,7 @@ internal object WindowControlNative {
     )
 
     @JvmField
-    val TerminateProcess: MethodHandle = PanamaNative.downcall(
+    val TerminateProcess: MethodHandle = PanamaNative.downcallCapturingLastError(
         lookup = PanamaNative.Kernel32Lib.lookup,
         name = "TerminateProcess",
         descriptor = FunctionDescriptor.of(

@@ -7,6 +7,8 @@ import com.michibaum.kwswitcher.core.domain.WindowInfo
 import com.michibaum.kwswitcher.core.port.WindowCatalogPort
 import com.michibaum.kwswitcher.win32.bindings.MutexNative
 import com.michibaum.kwswitcher.win32.bindings.PanamaNative
+import com.michibaum.kwswitcher.win32.bindings.PanamaNative.allocateCaptureState
+import com.michibaum.kwswitcher.win32.bindings.PanamaNative.readCapturedLastError
 import com.michibaum.kwswitcher.win32.bindings.PanamaNative.readWideString
 import com.michibaum.kwswitcher.win32.bindings.Win32Constants
 import com.michibaum.kwswitcher.win32.bindings.Win32Structs
@@ -49,16 +51,19 @@ class Win32WindowEnumerator internal constructor(
 
     override fun enumerateOpenWindows(): List<WindowInfo> {
         val rawWindows = mutableListOf<RawWindowEntry>()
-        val excludedHwnds = excludedHwndsProvider()
-        val config = configProvider()
+        var resolvedExcluded: Set<WindowHandle>? = null
+        var resolvedConfig: SwitcherConfig? = null
         val monitors = linkedMapOf<Long, Boolean>()
         val processCache = HashMap<Int, ProcessMetadata>()
 
         Arena.ofConfined().use { arena ->
             val scratch = ReusableScratch(arena)
+            val enumCaptureState = arena.allocateCaptureState()
             val visitor = WindowVisitor { hwndSegment ->
+                val excludedHwnds = resolvedExcluded ?: excludedHwndsProvider().also { resolvedExcluded = it }
                 val handle = WindowHandle(hwndSegment.address())
                 if (handle.isValid && handle !in excludedHwnds) {
+                    val config = resolvedConfig ?: configProvider().also { resolvedConfig = it }
                     inspectWindow(
                         arena = arena,
                         scratch = scratch,
@@ -82,9 +87,16 @@ class Win32WindowEnumerator internal constructor(
             val previousVisitor = UpcallBridge.activeVisitor.get()
             UpcallBridge.activeVisitor.set(visitor)
             try {
-                val ok = WindowEnumNative.EnumWindows.invokeExact(UpcallBridge.sharedUpcallStub, 0L) as Int
+                val ok = WindowEnumNative.EnumWindows.invokeExact(
+                    enumCaptureState,
+                    UpcallBridge.sharedUpcallStub,
+                    0L,
+                ) as Int
                 if (ok == 0) {
-                    val err = Win32ErrorFormatter.describeLastError("EnumWindows")
+                    val err = Win32ErrorFormatter.describeError(
+                        operation = "EnumWindows",
+                        errorCode = enumCaptureState.readCapturedLastError(),
+                    )
                     logger.warn { "EnumWindows reported failure: ${err.detail}" }
                 }
             } finally {
@@ -119,11 +131,15 @@ class Win32WindowEnumerator internal constructor(
                 return null
             }
 
+            val captureState = arena.allocateCaptureState()
             val monitorInfo = arena.allocate(Win32Structs.MONITORINFO_LAYOUT)
             Win32Structs.MONITORINFO_CB_SIZE.set(monitorInfo, Win32Structs.MONITORINFO_LAYOUT.byteSize().toInt())
-            val ok = WindowEnumNative.GetMonitorInfoW.invokeExact(hMonitor, monitorInfo) as Int
+            val ok = WindowEnumNative.GetMonitorInfoW.invokeExact(captureState, hMonitor, monitorInfo) as Int
             if (ok == 0) {
-                val err = Win32ErrorFormatter.describeLastError("GetMonitorInfoW")
+                val err = Win32ErrorFormatter.describeError(
+                    operation = "GetMonitorInfoW",
+                    errorCode = captureState.readCapturedLastError(),
+                )
                 logger.debug { "GetMonitorInfoW failed: ${err.detail}" }
                 return null
             }
@@ -242,6 +258,7 @@ class Win32WindowEnumerator internal constructor(
         val monitorInfo = scratch.monitorInfoSegment
         Win32Structs.MONITORINFO_CB_SIZE.set(monitorInfo, Win32Structs.MONITORINFO_LAYOUT.byteSize().toInt())
         val ok = WindowEnumNative.GetMonitorInfoW.invokeExact(
+            scratch.captureState,
             MemorySegment.ofAddress(hMonitorAddress),
             monitorInfo,
         ) as Int
@@ -274,6 +291,7 @@ class Win32WindowEnumerator internal constructor(
     internal data class ProcessMetadata(val exePath: String, val processName: String)
 
     internal class ReusableScratch(arena: Arena) {
+        val captureState: MemorySegment = arena.allocateCaptureState()
         val pidSegment: MemorySegment = arena.allocate(ValueLayout.JAVA_INT)
         val cloakedSegment: MemorySegment = arena.allocate(ValueLayout.JAVA_INT)
         val pathBuffer: MemorySegment = arena.allocate(ValueLayout.JAVA_CHAR, PATH_BUFFER_CAPACITY.toLong())
@@ -321,8 +339,14 @@ class Win32WindowEnumerator internal constructor(
     private object UpcallBridge {
         val activeVisitor = ThreadLocal<WindowVisitor?>()
 
+        @Suppress("TooGenericExceptionCaught")
         private val dispatchCallback = EnumCallback { hwnd, _ ->
-            activeVisitor.get()?.visit(hwnd) ?: 1
+            try {
+                activeVisitor.get()?.visit(hwnd) ?: 1
+            } catch (e: Exception) {
+                logger.error(e) { "Uncaught exception in EnumWindows callback; continuing enumeration" }
+                1
+            }
         }
 
         @JvmField
@@ -359,13 +383,14 @@ class Win32WindowEnumerator internal constructor(
         internal fun queryProcessImagePath(pid: Int, scratch: ReusableScratch): String {
             if (pid <= 0) return ""
             val processHandle = WindowEnumNative.OpenProcess.invokeExact(
+                scratch.captureState,
                 Win32Constants.PROCESS_QUERY_LIMITED_INFORMATION,
                 0,
                 pid,
             ) as MemorySegment
             if (processHandle == MemorySegment.NULL) {
+                val code = scratch.captureState.readCapturedLastError()
                 logger.trace {
-                    val code = Win32ErrorFormatter.lastErrorCode()
                     "OpenProcess(pid=$pid) skipped (errorCode=$code)"
                 }
                 return ""

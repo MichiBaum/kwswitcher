@@ -6,6 +6,7 @@ package com.michibaum.kwswitcher.win32.bindings
 object Win32Constants {
     const val WH_KEYBOARD_LL: Int = 13
     const val HC_ACTION: Int = 0
+    const val PM_NOREMOVE: Int = 0x0000
 
     const val WM_CLOSE: Int = 0x0010
     const val WM_QUIT: Int = 0x0012

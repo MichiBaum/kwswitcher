@@ -282,7 +282,7 @@ class Win32IconExtractor internal constructor(
 /**
  * Low-level Win32 `HICON` lookup, 32-bit top-down DIB extraction, and multi-step bicubic scaling.
  */
-private object HIconDibDecoder {
+internal object HIconDibDecoder {
 
     private const val ICON_QUERY_TIMEOUT_MS: Int = 50
     private const val MAX_ICON_DIMENSION: Int = 256
@@ -332,12 +332,17 @@ private object HIconDibDecoder {
         try {
             hbmMask = Win32Structs.ICONINFO_HBM_MASK.get(iconInfo) as MemorySegment
             hbmColor = Win32Structs.ICONINFO_HBM_COLOR.get(iconInfo) as MemorySegment
-            val bitmapToRead = if (hbmColor != MemorySegment.NULL) hbmColor else hbmMask
+            val isMonochrome = hbmColor == MemorySegment.NULL
+            val bitmapToRead = if (!isMonochrome) hbmColor else hbmMask
             if (bitmapToRead == MemorySegment.NULL) {
                 return null
             }
 
-            val dimensions = queryBitmapDimensions(arena = arena, bitmap = bitmapToRead) ?: return null
+            val dimensions = queryBitmapDimensions(
+                arena = arena,
+                bitmap = bitmapToRead,
+                isMonochrome = isMonochrome,
+            ) ?: return null
             hdc = GdiIconNative.CreateCompatibleDC.invokeExact(MemorySegment.NULL) as MemorySegment
             if (hdc == MemorySegment.NULL) {
                 return null
@@ -349,6 +354,7 @@ private object HIconDibDecoder {
                 bitmap = bitmapToRead,
                 width = dimensions.first,
                 height = dimensions.second,
+                isMonochrome = isMonochrome,
             )
         } finally {
             if (hdc != MemorySegment.NULL) {
@@ -363,7 +369,7 @@ private object HIconDibDecoder {
         }
     }
 
-    private fun queryBitmapDimensions(arena: Arena, bitmap: MemorySegment): Pair<Int, Int>? {
+    private fun queryBitmapDimensions(arena: Arena, bitmap: MemorySegment, isMonochrome: Boolean): Pair<Int, Int>? {
         val bitmapStruct = arena.allocate(Win32Structs.BITMAP_LAYOUT)
         val gotObj = GdiIconNative.GetObjectW.invokeExact(
             bitmap,
@@ -375,7 +381,8 @@ private object HIconDibDecoder {
         }
         val width = Win32Structs.BITMAP_BM_WIDTH.get(bitmapStruct) as Int
         val height = Win32Structs.BITMAP_BM_HEIGHT.get(bitmapStruct) as Int
-        if (width <= 0 || height <= 0 || width > MAX_ICON_DIMENSION || height > MAX_ICON_DIMENSION) {
+        val maxHeight = if (isMonochrome) MAX_ICON_DIMENSION * 2 else MAX_ICON_DIMENSION
+        if (width <= 0 || height <= 0 || width > MAX_ICON_DIMENSION || height > maxHeight) {
             return null
         }
         return width to height
@@ -387,6 +394,7 @@ private object HIconDibDecoder {
         bitmap: MemorySegment,
         width: Int,
         height: Int,
+        isMonochrome: Boolean,
     ): BufferedImage? {
         val bmi = arena.allocate(Win32Structs.BITMAPINFOHEADER_LAYOUT)
         Win32Structs.BMIH_BI_SIZE.set(bmi, Win32Structs.BITMAPINFOHEADER_LAYOUT.byteSize().toInt())
@@ -411,9 +419,45 @@ private object HIconDibDecoder {
             return null
         }
 
+        if (isMonochrome && height >= 2 && height % 2 == 0) {
+            return decodeMonochromeMask(pixelsSegment = pixelsSegment, width = width, maskHeight = height)
+        }
+
         val argb = normalizeAlphaChannel(pixelsSegment = pixelsSegment, pixelCount = pixelCount) ?: return null
         val image = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
         image.setRGB(0, 0, width, height, argb, 0, width)
+        return image
+    }
+
+    internal fun decodeMonochromeMask(pixelsSegment: MemorySegment, width: Int, maskHeight: Int): BufferedImage? {
+        if (width <= 0 || maskHeight < 2 || maskHeight % 2 != 0) {
+            return null
+        }
+        val iconHeight = maskHeight / 2
+        val iconPixelCount = width * iconHeight
+        val argb = IntArray(iconPixelCount)
+        var anyVisible = false
+        for (i in 0 until iconPixelCount) {
+            val andMaskSet = (pixelsSegment.getAtIndex(ValueLayout.JAVA_INT, i.toLong()) and RGB_COLOR_MASK) != 0
+            val xorMaskSet = (
+                pixelsSegment.getAtIndex(ValueLayout.JAVA_INT, (i + iconPixelCount).toLong()) and RGB_COLOR_MASK
+                ) != 0
+            val pixel = when {
+                !andMaskSet && xorMaskSet -> FULL_ALPHA_MASK or RGB_COLOR_MASK
+                !andMaskSet -> FULL_ALPHA_MASK
+                xorMaskSet -> FULL_ALPHA_MASK or RGB_COLOR_MASK
+                else -> 0
+            }
+            if (pixel != 0) {
+                anyVisible = true
+            }
+            argb[i] = pixel
+        }
+        if (!anyVisible) {
+            return null
+        }
+        val image = BufferedImage(width, iconHeight, BufferedImage.TYPE_INT_ARGB)
+        image.setRGB(0, 0, width, iconHeight, argb, 0, width)
         return image
     }
 
