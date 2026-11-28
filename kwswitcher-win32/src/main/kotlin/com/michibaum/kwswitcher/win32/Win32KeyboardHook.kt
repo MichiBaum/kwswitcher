@@ -10,6 +10,8 @@ import com.michibaum.kwswitcher.core.port.HotkeyHookPort
 import com.michibaum.kwswitcher.core.port.OverlayHookSnapshot
 import com.michibaum.kwswitcher.win32.bindings.HookNative
 import com.michibaum.kwswitcher.win32.bindings.PanamaNative
+import com.michibaum.kwswitcher.win32.bindings.PanamaNative.allocateCaptureState
+import com.michibaum.kwswitcher.win32.bindings.PanamaNative.readCapturedLastError
 import com.michibaum.kwswitcher.win32.bindings.Win32Constants
 import com.michibaum.kwswitcher.win32.bindings.Win32Structs
 import com.michibaum.kwswitcher.win32.diagnostics.Win32ErrorFormatter
@@ -85,7 +87,14 @@ class Win32KeyboardHook(
             start()
         }
         hookThread = thread
-        startedLatch.await(HOOK_STARTUP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        val started = startedLatch.await(HOOK_STARTUP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        if (!started) {
+            logger.error {
+                "Timed out after ${HOOK_STARTUP_TIMEOUT_SECONDS}s waiting for WH_KEYBOARD_LL hook thread startup"
+            }
+            close()
+            return false
+        }
         return installedOk.get()
     }
 
@@ -94,6 +103,8 @@ class Win32KeyboardHook(
         hookThreadId.set(threadId)
 
         Arena.ofShared().use { arena ->
+            val msg = arena.allocate(Win32Structs.MSG_LAYOUT)
+            val captureState = arena.allocateCaptureState()
             val callback = HookCallback { nCode, wParam, lParam ->
                 handleLowLevelKey(nCode = nCode, wParam = wParam, lParam = lParam)
             }
@@ -105,6 +116,7 @@ class Win32KeyboardHook(
 
             val moduleHandle = HookNative.GetModuleHandleW.invokeExact(MemorySegment.NULL) as MemorySegment
             val hookHandle = HookNative.SetWindowsHookExW.invokeExact(
+                captureState,
                 Win32Constants.WH_KEYBOARD_LL,
                 upcallStub,
                 moduleHandle,
@@ -112,19 +124,29 @@ class Win32KeyboardHook(
             ) as MemorySegment
 
             if (hookHandle == MemorySegment.NULL) {
-                val err = Win32ErrorFormatter.describeLastError("SetWindowsHookExW(WH_KEYBOARD_LL)")
+                val err = Win32ErrorFormatter.describeError(
+                    operation = "SetWindowsHookExW(WH_KEYBOARD_LL)",
+                    errorCode = captureState.readCapturedLastError(),
+                )
                 logger.error { "Failed to install WH_KEYBOARD_LL keyboard hook: ${err.detail}" }
                 running.set(false)
                 startedLatch.countDown()
                 return
             }
 
-            installedOk.set(true)
-            startedLatch.countDown()
-            logger.info { "Installed WH_KEYBOARD_LL keyboard hook on threadId=$threadId" }
-
             try {
-                val msg = arena.allocate(Win32Structs.MSG_LAYOUT)
+                // Force Win32 to create this thread's message queue before signaling readiness
+                HookNative.PeekMessageW.invokeExact(
+                    msg,
+                    MemorySegment.NULL,
+                    0,
+                    0,
+                    Win32Constants.PM_NOREMOVE,
+                ) as Int
+                installedOk.set(true)
+                startedLatch.countDown()
+                logger.info { "Installed WH_KEYBOARD_LL keyboard hook on threadId=$threadId" }
+
                 while (running.get()) {
                     val result = HookNative.GetMessageW.invokeExact(
                         msg,
@@ -145,28 +167,41 @@ class Win32KeyboardHook(
         }
     }
 
+    @Suppress("TooGenericExceptionCaught")
     internal fun handleLowLevelKey(nCode: Int, wParam: Long, lParam: MemorySegment): Long {
-        if (nCode >= Win32Constants.HC_ACTION && lParam != MemorySegment.NULL) {
-            val structSegment = lParam.reinterpret(Win32Structs.KBDLLHOOKSTRUCT_LAYOUT.byteSize())
-            val flags = Win32Structs.KBDLL_FLAGS.get(structSegment) as Int
-            if ((flags and Win32Constants.LLKHF_INJECTED) == 0) {
-                val vkCode = Win32Structs.KBDLL_VK_CODE.get(structSegment) as Int
-                val shouldSwallow = processKeyMessage(
-                    message = wParam.toInt(),
-                    vkCode = vkCode,
-                    flags = flags,
-                )
-                if (shouldSwallow) {
-                    return 1L
+        try {
+            if (nCode >= Win32Constants.HC_ACTION && lParam != MemorySegment.NULL) {
+                val structSegment = lParam.reinterpret(Win32Structs.KBDLLHOOKSTRUCT_LAYOUT.byteSize())
+                val flags = Win32Structs.KBDLL_FLAGS.get(structSegment) as Int
+                if ((flags and Win32Constants.LLKHF_INJECTED) == 0) {
+                    val vkCode = Win32Structs.KBDLL_VK_CODE.get(structSegment) as Int
+                    val shouldSwallow = processKeyMessage(
+                        message = wParam.toInt(),
+                        vkCode = vkCode,
+                        flags = flags,
+                    )
+                    if (shouldSwallow) {
+                        return 1L
+                    }
                 }
             }
+        } catch (e: Exception) {
+            logger.error(e) { "Uncaught exception in WH_KEYBOARD_LL callback; passing key through" }
         }
-        return HookNative.CallNextHookEx.invokeExact(
+        return callNextHookSafely(nCode = nCode, wParam = wParam, lParam = lParam)
+    }
+
+    @Suppress("TooGenericExceptionCaught")
+    private fun callNextHookSafely(nCode: Int, wParam: Long, lParam: MemorySegment): Long = try {
+        HookNative.CallNextHookEx.invokeExact(
             MemorySegment.NULL,
             nCode,
             wParam,
             lParam,
         ) as Long
+    } catch (e: Exception) {
+        logger.error(e) { "CallNextHookEx failed in WH_KEYBOARD_LL callback" }
+        0L
     }
 
     internal fun processKeyMessage(message: Int, vkCode: Int, flags: Int): Boolean {
@@ -260,22 +295,45 @@ class Win32KeyboardHook(
     }
 
     override fun close() {
-        pendingOpenCount.set(0)
+        resetState()
         if (!running.compareAndSet(true, false)) {
             eventChannel.close()
             return
         }
-        val tid = hookThreadId.get()
+        val tid = hookThreadId.getAndSet(0)
         if (tid != 0) {
-            HookNative.PostThreadMessageW.invokeExact(
+            postQuitToHookThread(tid)
+        }
+        hookThread?.join(THREAD_JOIN_TIMEOUT_MS)
+        hookThread = null
+        eventChannel.close()
+    }
+
+    private fun resetState() {
+        pendingOpenCount.set(0)
+        modifierHeld = false
+        reverseModifierHeld = false
+        modifiers.reset()
+    }
+
+    private fun postQuitToHookThread(tid: Int) {
+        Arena.ofConfined().use { arena ->
+            val captureState = arena.allocateCaptureState()
+            val posted = HookNative.PostThreadMessageW.invokeExact(
+                captureState,
                 tid,
                 Win32Constants.WM_QUIT,
                 0L,
                 0L,
             ) as Int
+            if (posted == 0) {
+                val err = Win32ErrorFormatter.describeError(
+                    operation = "PostThreadMessageW(WM_QUIT, tid=$tid)",
+                    errorCode = captureState.readCapturedLastError(),
+                )
+                logger.warn { "Failed posting WM_QUIT to hook thread tid=$tid: ${err.detail}" }
+            }
         }
-        hookThread?.join(THREAD_JOIN_TIMEOUT_MS)
-        eventChannel.close()
     }
 
     private fun interface HookCallback {
@@ -322,6 +380,18 @@ class Win32KeyboardHook(
                 Win32Constants.VK_RMENU -> rightAlt = isKeyDown
                 Win32Constants.VK_MENU -> genericAlt = isKeyDown
             }
+        }
+
+        fun reset() {
+            leftCtrl = false
+            rightCtrl = false
+            genericCtrl = false
+            leftShift = false
+            rightShift = false
+            genericShift = false
+            leftAlt = false
+            rightAlt = false
+            genericAlt = false
         }
 
         fun isCtrlDown(): Boolean = leftCtrl || rightCtrl || genericCtrl || keyStateProvider(Win32Constants.VK_CONTROL)

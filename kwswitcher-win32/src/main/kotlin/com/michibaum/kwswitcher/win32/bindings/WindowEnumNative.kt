@@ -9,7 +9,7 @@ import java.lang.invoke.MethodHandle
  */
 internal object WindowEnumNative {
     @JvmField
-    val EnumWindows: MethodHandle = PanamaNative.downcall(
+    val EnumWindows: MethodHandle = PanamaNative.downcallCapturingLastError(
         lookup = PanamaNative.User32Lib.lookup,
         name = "EnumWindows",
         descriptor = FunctionDescriptor.of(
@@ -114,7 +114,7 @@ internal object WindowEnumNative {
     )
 
     @JvmField
-    val OpenProcess: MethodHandle = PanamaNative.downcall(
+    val OpenProcess: MethodHandle = PanamaNative.downcallCapturingLastError(
         lookup = PanamaNative.Kernel32Lib.lookup,
         name = "OpenProcess",
         descriptor = FunctionDescriptor.of(
@@ -161,7 +161,7 @@ internal object WindowEnumNative {
     )
 
     @JvmField
-    val GetMonitorInfoW: MethodHandle = PanamaNative.downcall(
+    val GetMonitorInfoW: MethodHandle = PanamaNative.downcallCapturingLastError(
         lookup = PanamaNative.User32Lib.lookup,
         name = "GetMonitorInfoW",
         descriptor = FunctionDescriptor.of(

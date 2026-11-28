@@ -8,6 +8,7 @@ import com.michibaum.kwswitcher.core.domain.WindowHandle
 import com.michibaum.kwswitcher.core.domain.WindowInfo
 import com.michibaum.kwswitcher.core.port.NativeResult
 import com.michibaum.kwswitcher.core.port.OverlayHookSnapshot
+import com.michibaum.kwswitcher.win32.bindings.PanamaNative
 import com.michibaum.kwswitcher.win32.bindings.Win32Constants
 import com.michibaum.kwswitcher.win32.bindings.Win32Structs
 import com.michibaum.kwswitcher.win32.bindings.WindowControlNative
@@ -24,6 +25,7 @@ import java.awt.GraphicsEnvironment
 import java.awt.Toolkit
 import java.awt.image.BufferedImage
 import java.lang.foreign.Arena
+import java.lang.foreign.FunctionDescriptor
 import java.lang.foreign.MemorySegment
 import java.lang.foreign.ValueLayout
 import java.util.concurrent.CountDownLatch
@@ -318,6 +320,138 @@ class Win32EngineTest {
         }
     }
 
+    @Test
+    fun `HIconDibDecoder decodes stacked 2x-height monochrome AND-XOR masks into 1-to-1 ARGB image`() {
+        Arena.ofConfined().use { arena ->
+            val width = 16
+            val iconHeight = 16
+            val maskHeight = iconHeight * 2
+            val totalPixels = width * maskHeight
+            val segment = arena.allocate(ValueLayout.JAVA_INT, totalPixels.toLong())
+
+            // Fill default as transparent (AND = 1 -> 0x00FFFFFF, XOR = 0 -> 0x00000000)
+            val iconPixelCount = width * iconHeight
+            for (i in 0 until iconPixelCount) {
+                segment.setAtIndex(ValueLayout.JAVA_INT, i.toLong(), 0x00FFFFFF)
+                segment.setAtIndex(ValueLayout.JAVA_INT, (i + iconPixelCount).toLong(), 0)
+            }
+            assertNull(HIconDibDecoder.decodeMonochromeMask(segment, width = width, maskHeight = maskHeight))
+
+            // Pixel (1, 1): opaque black (AND = 0, XOR = 0)
+            val blackIdx = 1 * width + 1
+            segment.setAtIndex(ValueLayout.JAVA_INT, blackIdx.toLong(), 0)
+            segment.setAtIndex(ValueLayout.JAVA_INT, (blackIdx + iconPixelCount).toLong(), 0)
+
+            // Pixel (2, 2): opaque white (AND = 0, XOR = 1)
+            val whiteIdx = 2 * width + 2
+            segment.setAtIndex(ValueLayout.JAVA_INT, whiteIdx.toLong(), 0)
+            segment.setAtIndex(ValueLayout.JAVA_INT, (whiteIdx + iconPixelCount).toLong(), 0x00FFFFFF)
+
+            // Pixel (3, 3): inverted pixel rendered as opaque white (AND = 1, XOR = 1)
+            val invertIdx = 3 * width + 3
+            segment.setAtIndex(ValueLayout.JAVA_INT, invertIdx.toLong(), 0x00FFFFFF)
+            segment.setAtIndex(ValueLayout.JAVA_INT, (invertIdx + iconPixelCount).toLong(), 0x00FFFFFF)
+
+            val decoded = HIconDibDecoder.decodeMonochromeMask(segment, width = width, maskHeight = maskHeight)
+            assertNotNull(decoded)
+            assertEquals(16, decoded.width)
+            assertEquals(16, decoded.height)
+            assertEquals(0x00000000, decoded.getRGB(0, 0))
+            assertEquals(0xFF000000.toInt(), decoded.getRGB(1, 1))
+            assertEquals(0xFFFFFFFF.toInt(), decoded.getRGB(2, 2))
+            assertEquals(0xFFFFFFFF.toInt(), decoded.getRGB(3, 3))
+        }
+    }
+
+    @EnabledOnOs(OS.WINDOWS)
+    @Test
+    fun `HIconDibDecoder converts live Win32 monochrome HICON without 2x vertical stretching`() {
+        val createIcon = PanamaNative.downcall(
+            lookup = PanamaNative.User32Lib.lookup,
+            name = "CreateIcon",
+            descriptor = FunctionDescriptor.of(
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_BYTE,
+                ValueLayout.JAVA_BYTE,
+                ValueLayout.ADDRESS,
+                ValueLayout.ADDRESS,
+            ),
+        )
+        val destroyIcon = PanamaNative.downcall(
+            lookup = PanamaNative.User32Lib.lookup,
+            name = "DestroyIcon",
+            descriptor = FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS),
+        )
+
+        Arena.ofConfined().use { arena ->
+            // 16x16 1-bpp planes = 2 bytes per row * 16 rows = 32 bytes each
+            val planeBytes = 32L
+            val andPlane = arena.allocate(planeBytes)
+            val xorPlane = arena.allocate(planeBytes)
+            andPlane.fill(0xFF.toByte())
+            xorPlane.fill(0x00.toByte())
+            // Make top row opaque white (AND = 0x00, XOR = 0xFF)
+            andPlane.set(ValueLayout.JAVA_BYTE, 0L, 0x00.toByte())
+            xorPlane.set(ValueLayout.JAVA_BYTE, 0L, 0xFF.toByte())
+
+            val hIcon = createIcon.invokeExact(
+                MemorySegment.NULL,
+                16,
+                16,
+                1.toByte(),
+                1.toByte(),
+                andPlane,
+                xorPlane,
+            ) as MemorySegment
+            assertTrue(hIcon != MemorySegment.NULL)
+            try {
+                val image = HIconDibDecoder.convertHIconToImage(arena = arena, hIcon = hIcon)
+                assertNotNull(image)
+                assertEquals(16, image.width)
+                assertEquals(16, image.height)
+                assertEquals(0xFFFFFFFF.toInt(), image.getRGB(0, 0))
+                assertEquals(0x00000000, image.getRGB(0, 15))
+            } finally {
+                destroyIcon.invokeExact(hIcon) as Int
+            }
+        }
+    }
+
+    @EnabledOnOs(OS.WINDOWS)
+    @Test
+    fun `Win32WindowEnumerator contains uncaught exceptions inside live EnumWindows native upcall`() {
+        var threwConfigOnce = false
+        val configThrowingEnumerator = Win32WindowEnumerator(
+            configProvider = {
+                if (!threwConfigOnce) {
+                    threwConfigOnce = true
+                    error("Simulated configProvider failure inside EnumWindows upcall")
+                }
+                SwitcherConfig()
+            },
+        )
+        // Must not abort JVM or propagate exception out of EnumWindows
+        val windowsAfterSingleThrow = configThrowingEnumerator.enumerateOpenWindows()
+        assertTrue(threwConfigOnce || windowsAfterSingleThrow.isEmpty())
+
+        var threwResolverOnce = false
+        val resolverThrowingEnumerator = Win32WindowEnumerator(
+            excludedHwndsProvider = { emptySet() },
+            configProvider = { SwitcherConfig() },
+            processImagePathResolver = { pid, scratch ->
+                if (!threwResolverOnce) {
+                    threwResolverOnce = true
+                    error("Simulated processImagePathResolver failure inside EnumWindows upcall")
+                }
+                Win32WindowEnumerator.queryProcessImagePath(pid, scratch)
+            },
+        )
+        resolverThrowingEnumerator.enumerateOpenWindows()
+    }
+
     @EnabledOnOs(OS.WINDOWS)
     @Test
     fun `Win32SingleInstanceMutex acquires primary lock and isolates dev mutex from production mutex`() {
@@ -331,7 +465,45 @@ class Win32EngineTest {
             Win32SingleInstanceMutex(mutexName = devMutexName).use { parallelDev ->
                 assertTrue(parallelDev.tryAcquire())
             }
+
+            // Closing primary unowned mutex from a different thread must cleanly release the OS kernel handle
+            val closeThread = Thread { firstProd.close() }
+            closeThread.start()
+            closeThread.join(2_000)
+            assertFalse(closeThread.isAlive)
+
+            Win32SingleInstanceMutex(mutexName = prodMutexName).use { reacquired ->
+                assertTrue(reacquired.tryAcquire(), "Mutex should be re-acquirable after cross-thread close()")
+            }
         }
+    }
+
+    @Test
+    fun `Win32StartupRegistry resolveNativeLauncherCommand rejects java launchers and relative paths`() {
+        assertNull(Win32StartupRegistry.resolveNativeLauncherCommand(null))
+        assertNull(Win32StartupRegistry.resolveNativeLauncherCommand(""))
+        assertNull(Win32StartupRegistry.resolveNativeLauncherCommand("kwswitcher.exe"))
+        assertNull(Win32StartupRegistry.resolveNativeLauncherCommand("bin\\kwswitcher.exe"))
+        assertNull(Win32StartupRegistry.resolveNativeLauncherCommand("\\kwswitcher.exe"))
+        assertNull(Win32StartupRegistry.resolveNativeLauncherCommand("javaw.exe"))
+        assertNull(
+            Win32StartupRegistry.resolveNativeLauncherCommand(
+                "C:\\Program Files\\Java\\jdk-25\\bin\\java.exe",
+            ),
+        )
+        assertNull(
+            Win32StartupRegistry.resolveNativeLauncherCommand(
+                "\"C:\\Program Files\\Java\\jdk-25\\bin\\JAVAW.EXE\"",
+            ),
+        )
+        assertEquals(
+            "\"C:\\Tools\\kwswitcher\\kwswitcher.exe\"",
+            Win32StartupRegistry.resolveNativeLauncherCommand("C:\\Tools\\kwswitcher\\kwswitcher.exe"),
+        )
+        assertEquals(
+            "\"C:\\Tools\\kwswitcher\\kwswitcher.exe\"",
+            Win32StartupRegistry.resolveNativeLauncherCommand("\"C:\\Tools\\kwswitcher\\kwswitcher.exe\""),
+        )
     }
 
     @EnabledOnOs(OS.WINDOWS)
@@ -348,7 +520,21 @@ class Win32EngineTest {
             assertTrue(registry.isRegistered())
             assertEquals(expectedCommand, registry.getRegisteredCommand())
 
-            assertTrue(registry.setRegistered(enabled = false))
+            // Unsupported/java.exe launcher refuses setRegistered(true), leaves existing or empty state safe,
+            // while setRegistered(false) still cleans up existing entries
+            val unsupportedRegistry = Win32StartupRegistry(
+                subKey = testSubKey,
+                valueName = "kwswitcher-unit-test",
+                commandProvider = { null },
+            )
+            assertFalse(unsupportedRegistry.isSupported)
+            assertFalse(unsupportedRegistry.setRegistered(enabled = true))
+            assertFalse(
+                registry.setRegistered(enabled = true) {
+                    "C:\\Program Files\\Java\\jdk-25\\bin\\java.exe"
+                },
+            )
+            assertTrue(unsupportedRegistry.setRegistered(enabled = false))
             assertFalse(registry.isRegistered())
             assertNull(registry.getRegisteredCommand())
             assertTrue(registry.setRegistered(enabled = false))
@@ -496,7 +682,110 @@ class Win32KeyboardHookGuardTest {
             // European AltGr (LCtrl + RAlt) passes through
             hook.processKeyMessage(Win32Constants.WM_SYSKEYDOWN, Win32Constants.VK_RMENU, Win32Constants.LLKHF_ALTDOWN)
             assertFalse(hook.processKeyMessage(Win32Constants.WM_KEYDOWN, 'W'.code, Win32Constants.LLKHF_ALTDOWN))
+            assertFalse(hook.processKeyMessage(Win32Constants.WM_KEYDOWN, 'Q'.code, Win32Constants.LLKHF_ALTDOWN))
+            assertFalse(hook.processKeyMessage(Win32Constants.WM_KEYDOWN, '2'.code, Win32Constants.LLKHF_ALTDOWN))
             assertNull(hook.pollIntent())
         }
+    }
+
+    @Test
+    fun `Win32KeyboardHook clamps multi-press pendingOpenCount race window and types digits while Alt is held`() {
+        var snapshot = OverlayHookSnapshot(mode = SwitcherMode.HIDDEN, isQueryEmpty = true)
+        Win32KeyboardHook(
+            overlayStateProvider = { snapshot },
+            keyStateProvider = { false },
+        ).use { hook ->
+            // Press Alt+Tab twice rapidly before coordinator publishes visible snapshot (pendingOpenCount = 2)
+            hook.processKeyMessage(Win32Constants.WM_SYSKEYDOWN, Win32Constants.VK_LMENU, Win32Constants.LLKHF_ALTDOWN)
+            assertTrue(
+                hook.processKeyMessage(
+                    Win32Constants.WM_SYSKEYDOWN,
+                    Win32Constants.VK_TAB,
+                    Win32Constants.LLKHF_ALTDOWN,
+                ),
+            )
+            assertTrue(
+                hook.processKeyMessage(
+                    Win32Constants.WM_SYSKEYDOWN,
+                    Win32Constants.VK_TAB,
+                    Win32Constants.LLKHF_ALTDOWN,
+                ),
+            )
+            assertEquals(SwitcherIntent.TriggerHotkey(reverse = false), hook.pollIntent())
+            assertEquals(SwitcherIntent.TriggerHotkey(reverse = false), hook.pollIntent())
+
+            // First acknowledge decrements pendingOpenCount from 2 -> 1: keys still route to active session!
+            hook.acknowledgeHotkeyHandled()
+            assertTrue(hook.processKeyMessage(Win32Constants.WM_SYSKEYDOWN, '5'.code, Win32Constants.LLKHF_ALTDOWN))
+            assertTrue(
+                hook.processKeyMessage(
+                    Win32Constants.WM_SYSKEYDOWN,
+                    Win32Constants.VK_NUMPAD7,
+                    Win32Constants.LLKHF_ALTDOWN,
+                ),
+            )
+            assertEquals(SwitcherIntent.AppendQueryChar('5'), hook.pollIntent())
+            assertEquals(SwitcherIntent.AppendQueryChar('7'), hook.pollIntent())
+
+            // Second acknowledge decrements pendingOpenCount from 1 -> 0; extra acknowledges clamp at 0
+            hook.acknowledgeHotkeyHandled()
+            hook.acknowledgeHotkeyHandled()
+            assertFalse(hook.processKeyMessage(Win32Constants.WM_SYSKEYDOWN, 'A'.code, Win32Constants.LLKHF_ALTDOWN))
+
+            // Once coordinator snapshot reports visible, Alt-held search typing works again
+            snapshot = OverlayHookSnapshot(mode = SwitcherMode.QUICK_SWITCH, isQueryEmpty = true)
+            assertTrue(hook.processKeyMessage(Win32Constants.WM_SYSKEYDOWN, 'F'.code, Win32Constants.LLKHF_ALTDOWN))
+            assertEquals(SwitcherIntent.AppendQueryChar('f'), hook.pollIntent())
+        }
+    }
+
+    @EnabledOnOs(OS.WINDOWS)
+    @Test
+    fun `Win32KeyboardHook contains uncaught provider exceptions in upcall and shuts down immediate start-close`() {
+        Arena.ofConfined().use { arena ->
+            val kbd = arena.allocate(Win32Structs.KBDLLHOOKSTRUCT_LAYOUT)
+            Win32Structs.KBDLL_VK_CODE.set(kbd, Win32Constants.VK_TAB)
+            Win32Structs.KBDLL_FLAGS.set(kbd, Win32Constants.LLKHF_ALTDOWN)
+
+            Win32KeyboardHook(
+                hotkeyConfigProvider = { error("Simulated hotkeyConfigProvider failure") },
+                keyStateProvider = { false },
+            ).use { throwingConfigHook ->
+                // Must catch exception and delegate to CallNextHookEx instead of aborting JVM
+                throwingConfigHook.handleLowLevelKey(
+                    Win32Constants.HC_ACTION,
+                    Win32Constants.WM_SYSKEYDOWN.toLong(),
+                    kbd,
+                )
+            }
+
+            Win32KeyboardHook(
+                hotkeyConfigProvider = { HotkeyConfig() },
+                overlayStateProvider = { error("Simulated overlayStateProvider failure") },
+                keyStateProvider = { false },
+            ).use { throwingStateHook ->
+                Win32Structs.KBDLL_VK_CODE.set(kbd, 'A'.code)
+                throwingStateHook.handleLowLevelKey(
+                    Win32Constants.HC_ACTION,
+                    Win32Constants.WM_SYSKEYDOWN.toLong(),
+                    kbd,
+                )
+            }
+        }
+
+        // Immediate start() followed by close() must exit GetMessageW via pre-created PeekMessageW queue
+        val hook = Win32KeyboardHook(keyStateProvider = { false })
+        hook.processKeyMessage(Win32Constants.WM_SYSKEYDOWN, Win32Constants.VK_LMENU, Win32Constants.LLKHF_ALTDOWN)
+        val startNanos = System.nanoTime()
+        try {
+            assertTrue(hook.start(), "WH_KEYBOARD_LL hook should install cleanly on Windows")
+        } finally {
+            hook.close()
+        }
+        val elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos)
+        assertTrue(elapsedMillis < 900, "Immediate start/close took ${elapsedMillis}ms (expected fast WM_QUIT exit)")
+
+        // Verify modifier state was reset on close() (Tab without Alt held must not trigger hotkey)
+        assertFalse(hook.processKeyMessage(Win32Constants.WM_KEYDOWN, Win32Constants.VK_TAB, 0))
     }
 }

@@ -10,7 +10,7 @@ import java.lang.invoke.MethodHandle
  */
 internal object MutexNative {
     @JvmField
-    val CreateMutexW: MethodHandle = PanamaNative.downcall(
+    val CreateMutexW: MethodHandle = PanamaNative.downcallCapturingLastError(
         lookup = PanamaNative.Kernel32Lib.lookup,
         name = "CreateMutexW",
         descriptor = FunctionDescriptor.of(

@@ -2,7 +2,9 @@ package com.michibaum.kwswitcher.win32
 
 import com.michibaum.kwswitcher.core.port.SingleInstancePort
 import com.michibaum.kwswitcher.win32.bindings.MutexNative
+import com.michibaum.kwswitcher.win32.bindings.PanamaNative.allocateCaptureState
 import com.michibaum.kwswitcher.win32.bindings.PanamaNative.allocateWideString
+import com.michibaum.kwswitcher.win32.bindings.PanamaNative.readCapturedLastError
 import com.michibaum.kwswitcher.win32.bindings.Win32Constants
 import com.michibaum.kwswitcher.win32.diagnostics.Win32ErrorFormatter
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -16,27 +18,35 @@ private val logger = KotlinLogging.logger {}
  */
 class Win32SingleInstanceMutex(val mutexName: String = DEFAULT_MUTEX_NAME) : SingleInstancePort {
 
+    private val lock = Any()
+
+    @Volatile
     private var mutexHandle: MemorySegment = MemorySegment.NULL
 
-    override fun tryAcquire(): Boolean {
+    override fun tryAcquire(): Boolean = synchronized(lock) {
         if (mutexHandle != MemorySegment.NULL) {
             return true
         }
         Arena.ofConfined().use { arena ->
+            val captureState = arena.allocateCaptureState()
             val nameSegment = arena.allocateWideString(mutexName)
             val handle = MutexNative.CreateMutexW.invokeExact(
+                captureState,
                 MemorySegment.NULL,
-                1,
+                0,
                 nameSegment,
             ) as MemorySegment
+            val lastError = captureState.readCapturedLastError()
 
             if (handle == MemorySegment.NULL) {
-                val err = Win32ErrorFormatter.describeLastError("CreateMutexW($mutexName)")
+                val err = Win32ErrorFormatter.describeError(
+                    operation = "CreateMutexW($mutexName)",
+                    errorCode = lastError,
+                )
                 logger.warn { "Failed to create single-instance mutex '$mutexName': ${err.detail}" }
                 return false
             }
 
-            val lastError = MutexNative.GetLastError.invokeExact() as Int
             if (lastError == Win32Constants.ERROR_ALREADY_EXISTS) {
                 MutexNative.CloseHandle.invokeExact(handle) as Int
                 logger.info { "Another instance already holds mutex '$mutexName'" }
@@ -49,11 +59,10 @@ class Win32SingleInstanceMutex(val mutexName: String = DEFAULT_MUTEX_NAME) : Sin
         }
     }
 
-    override fun close() {
+    override fun close() = synchronized(lock) {
         val handle = mutexHandle
         if (handle != MemorySegment.NULL) {
             mutexHandle = MemorySegment.NULL
-            MutexNative.ReleaseMutex.invokeExact(handle) as Int
             MutexNative.CloseHandle.invokeExact(handle) as Int
             logger.debug { "Released single-instance mutex '$mutexName'" }
         }

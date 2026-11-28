@@ -20,8 +20,11 @@ private val logger = KotlinLogging.logger {}
 class Win32StartupRegistry(
     private val subKey: String = DEFAULT_RUN_SUBKEY,
     private val valueName: String = DEFAULT_APP_VALUE_NAME,
-    private val commandProvider: () -> String = ::defaultLaunchCommand,
+    private val commandProvider: () -> String? = ::defaultLaunchCommand,
 ) : StartupRegistrationPort {
+
+    override val isSupported: Boolean
+        get() = commandProvider() != null
 
     @Suppress("TooGenericExceptionCaught")
     override fun isRegistered(): Boolean = try {
@@ -104,12 +107,20 @@ class Win32StartupRegistry(
     override fun setRegistered(enabled: Boolean): Boolean = setRegistered(enabled, commandProvider)
 
     @Suppress("TooGenericExceptionCaught")
-    fun setRegistered(enabled: Boolean, customCommandProvider: () -> String): Boolean = try {
+    fun setRegistered(enabled: Boolean, customCommandProvider: () -> String?): Boolean = try {
         Arena.ofConfined().use { arena ->
             val subKeySeg = arena.allocateWideString(subKey)
             val valueNameSeg = arena.allocateWideString(valueName)
             if (enabled) {
-                val command = customCommandProvider()
+                val rawCommand = customCommandProvider()
+                val command = resolveNativeLauncherCommand(rawCommand)
+                if (command == null) {
+                    logger.warn {
+                        "Cannot register Windows startup entry '$valueName': " +
+                            "native executable launcher is required (resolved='${rawCommand.orEmpty()}')"
+                    }
+                    return false
+                }
                 val dataSeg = arena.allocateWideString(command)
                 val status = RegistryNative.RegSetKeyValueW.invokeExact(
                     HKEY_CURRENT_USER_SEGMENT,
@@ -172,10 +183,26 @@ class Win32StartupRegistry(
 
         private val HKEY_CURRENT_USER_SEGMENT: MemorySegment =
             MemorySegment.ofAddress(Win32Constants.HKEY_CURRENT_USER)
+        private val WINDOWS_ABSOLUTE_PATH_REGEX = Regex("""^(?:[A-Za-z]:\\.+|\\\\[^\\]+\\[^\\]+.+)$""")
+        private val JVM_LAUNCHER_NAMES = setOf("java.exe", "javaw.exe", "java", "javaw")
 
-        internal fun defaultLaunchCommand(): String {
-            val exe = ProcessHandle.current().info().command().orElse("kwswitcher.exe")
-            return "\"$exe\""
+        internal fun defaultLaunchCommand(): String? =
+            resolveNativeLauncherCommand(ProcessHandle.current().info().command().orElse(null))
+
+        internal fun resolveNativeLauncherCommand(executablePath: String?): String? {
+            val raw = executablePath?.trim()?.removeSurrounding("\"")?.trim()
+            if (raw.isNullOrEmpty()) {
+                return null
+            }
+            val normalized = raw.replace('/', '\\')
+            if (!WINDOWS_ABSOLUTE_PATH_REGEX.matches(normalized) || normalized.endsWith('\\')) {
+                return null
+            }
+            val fileName = normalized.substringAfterLast('\\')
+            if (fileName.isBlank() || fileName.lowercase() in JVM_LAUNCHER_NAMES) {
+                return null
+            }
+            return "\"$normalized\""
         }
     }
 }

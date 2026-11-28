@@ -9,7 +9,7 @@ import java.lang.invoke.MethodHandle
  */
 internal object HookNative {
     @JvmField
-    val SetWindowsHookExW: MethodHandle = PanamaNative.downcall(
+    val SetWindowsHookExW: MethodHandle = PanamaNative.downcallCapturingLastError(
         lookup = PanamaNative.User32Lib.lookup,
         name = "SetWindowsHookExW",
         descriptor = FunctionDescriptor.of(
@@ -58,6 +58,20 @@ internal object HookNative {
     )
 
     @JvmField
+    val PeekMessageW: MethodHandle = PanamaNative.downcall(
+        lookup = PanamaNative.User32Lib.lookup,
+        name = "PeekMessageW",
+        descriptor = FunctionDescriptor.of(
+            ValueLayout.JAVA_INT,
+            ValueLayout.ADDRESS,
+            ValueLayout.ADDRESS,
+            ValueLayout.JAVA_INT,
+            ValueLayout.JAVA_INT,
+            ValueLayout.JAVA_INT,
+        ),
+    )
+
+    @JvmField
     val TranslateMessage: MethodHandle = PanamaNative.downcall(
         lookup = PanamaNative.User32Lib.lookup,
         name = "TranslateMessage",
@@ -78,7 +92,7 @@ internal object HookNative {
     )
 
     @JvmField
-    val PostThreadMessageW: MethodHandle = PanamaNative.downcall(
+    val PostThreadMessageW: MethodHandle = PanamaNative.downcallCapturingLastError(
         lookup = PanamaNative.User32Lib.lookup,
         name = "PostThreadMessageW",
         descriptor = FunctionDescriptor.of(
