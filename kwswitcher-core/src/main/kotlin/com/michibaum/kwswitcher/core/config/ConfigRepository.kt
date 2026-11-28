@@ -7,6 +7,8 @@ import kotlinx.serialization.json.Json
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.io.path.Path
 import kotlin.io.path.exists
 import kotlin.io.path.readText
@@ -35,12 +37,15 @@ class ConfigRepository(
     private val defaultConfig: SwitcherConfig = SwitcherConfig(),
 ) {
 
+    private val loadedFromCorruptFallback = AtomicBoolean(false)
+
     /**
      * Loads the configuration from [configPath], creating [defaultConfig] on disk if absent,
      * and returning structured diagnostics for parse errors or invalid regex patterns.
      */
     fun loadResult(): ConfigLoadResult {
         if (!configPath.exists()) {
+            loadedFromCorruptFallback.set(false)
             return try {
                 save(defaultConfig)
                 logger.info { "Created default configuration at $configPath" }
@@ -55,6 +60,7 @@ class ConfigRepository(
         return try {
             val rawJson = configPath.readText()
             val parsed = parseJson(rawJson)
+            loadedFromCorruptFallback.set(false)
             val warnings = parsed.validationWarnings
             for (warning in warnings) {
                 logger.warn { "Configuration validation warning in $configPath: $warning" }
@@ -62,6 +68,7 @@ class ConfigRepository(
             logger.debug { "Loaded configuration from $configPath (warnings=${warnings.size})" }
             ConfigLoadResult.Loaded(config = parsed, warnings = warnings)
         } catch (e: SerializationException) {
+            loadedFromCorruptFallback.set(true)
             val msg = "Malformed JSON in $configPath: ${e.message}"
             logger.warn(e) { "$msg; falling back to defaults" }
             ConfigLoadResult.FallbackOnError(config = defaultConfig, error = msg)
@@ -79,13 +86,34 @@ class ConfigRepository(
 
     /**
      * Writes [config] to [configPath] as pretty-printed JSON.
+     * If the prior [loadResult] fell back due to malformed JSON, backs up the broken file once before overwriting.
      */
     fun save(config: SwitcherConfig) {
         configPath.parent?.let { Files.createDirectories(it) }
+        if (loadedFromCorruptFallback.compareAndSet(true, false) && configPath.exists()) {
+            backupCorruptConfig()
+        }
         configPath.writeText(toJson(config))
     }
 
+    fun resolveCorruptBackupPath(): Path = configPath.resolveSibling("${configPath.fileName}$CORRUPT_BACKUP_SUFFIX")
+
+    private fun backupCorruptConfig() {
+        val backupPath = resolveCorruptBackupPath()
+        try {
+            Files.copy(configPath, backupPath, StandardCopyOption.REPLACE_EXISTING)
+            logger.warn {
+                "Backed up malformed configuration from $configPath to $backupPath before saving updated settings"
+            }
+        } catch (e: IOException) {
+            logger.warn(e) { "Failed backing up malformed configuration from $configPath to $backupPath" }
+        }
+    }
+
     companion object {
+        const val CORRUPT_BACKUP_SUFFIX: String = ".corrupt.bak"
+        private const val UTF8_BOM: String = "\uFEFF"
+
         @OptIn(ExperimentalSerializationApi::class)
         val jsonCodec: Json = Json {
             ignoreUnknownKeys = true
@@ -93,6 +121,8 @@ class ConfigRepository(
             encodeDefaults = true
             coerceInputValues = true
             decodeEnumsCaseInsensitive = true
+            allowComments = true
+            allowTrailingComma = true
         }
 
         fun resolveDefaultConfigPath(): Path {
@@ -117,6 +147,7 @@ class ConfigRepository(
 
         fun toJson(config: SwitcherConfig): String = jsonCodec.encodeToString(SwitcherConfig.serializer(), config)
 
-        fun parseJson(json: String): SwitcherConfig = jsonCodec.decodeFromString(SwitcherConfig.serializer(), json)
+        fun parseJson(json: String): SwitcherConfig =
+            jsonCodec.decodeFromString(SwitcherConfig.serializer(), json.removePrefix(UTF8_BOM))
     }
 }

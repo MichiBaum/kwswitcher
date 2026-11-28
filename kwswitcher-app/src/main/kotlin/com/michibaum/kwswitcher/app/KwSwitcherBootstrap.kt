@@ -383,6 +383,8 @@ object KwSwitcherBootstrap {
             coordinator = coordinator,
             ports = ports,
             overlay = overlay,
+            appScope = appScope,
+            trayRef = trayRef,
             sessionSupplier = sessionSupplier,
         )
         tray.install(initialTheme = activeConfig.get().theme)
@@ -399,24 +401,35 @@ object KwSwitcherBootstrap {
         coordinator: SwitcherCoordinator,
         ports: PlatformPorts,
         overlay: SwitcherOverlay,
+        appScope: CoroutineScope,
+        trayRef: AtomicReference<SystemTrayController?>,
         sessionSupplier: () -> RunningAppSession?,
     ): SystemTrayController = SystemTrayController(
         onShowSwitcher = { coordinator.dispatch(SwitcherIntent.ShowInteractive) },
         onReloadConfig = {
-            val reloaded = configRepository.loadOrCreate()
-            activeConfig.set(reloaded)
-            ports.icons.clearCache()
-            SwingUtilities.invokeLater {
-                val palette = ThemeManager.applyTheme(reloaded.theme)
-                overlay.updateConfigAndTheme(reloaded, palette)
+            appScope.launch(Dispatchers.IO) {
+                val reloaded = configRepository.loadOrCreate()
+                activeConfig.set(reloaded)
+                ports.icons.clearCache()
+                trayRef.get()?.updateSelectedTheme(reloaded.theme)
+                SwingUtilities.invokeLater {
+                    val palette = ThemeManager.applyTheme(reloaded.theme)
+                    overlay.updateConfigAndTheme(reloaded, palette)
+                }
             }
         },
         onSelectTheme = { theme: ThemeOption ->
             val updated = activeConfig.updateAndGet { it.copy(theme = theme) }
-            configRepository.save(updated)
             SwingUtilities.invokeLater {
                 val palette = ThemeManager.applyTheme(theme)
                 overlay.updateConfigAndTheme(updated, palette)
+            }
+            appScope.launch(Dispatchers.IO) {
+                try {
+                    configRepository.save(updated)
+                } catch (e: IOException) {
+                    logger.warn(e) { "Failed persisting selected theme $theme to ${configRepository.configPath}" }
+                }
             }
         },
         onQuit = { sessionSupplier()?.close() },
@@ -426,7 +439,11 @@ object KwSwitcherBootstrap {
             showPinOverlayToggle = profilePaths.showPinOverlayToggle,
             initialPinned = options.pinOverlay,
             onTogglePinOverlay = { pinned -> coordinator.dispatch(SwitcherIntent.SetPinned(pinned)) },
-            onOpenLogDirectory = { openLogDirectory(KwLoggingHub.logDirectory) },
+            onOpenLogDirectory = {
+                appScope.launch(Dispatchers.IO) {
+                    openLogDirectory(KwLoggingHub.logDirectory)
+                }
+            },
             onCopyDiagnostics = {
                 sessionSupplier()?.let { copyDiagnosticsToClipboard(it.buildDiagnosticsReport()) }
             },
