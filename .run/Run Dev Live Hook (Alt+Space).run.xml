@@ -1,0 +1,12 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Run Dev Live Hook (Alt+Space)" type="Application" factoryName="Application">
+    <option name="MAIN_CLASS_NAME" value="com.michibaum.kwswitcher.app.MainKt" />
+    <module name="kwswitcher-app" />
+    <option name="PROGRAM_PARAMETERS" value="--dev --log-level DEBUG" />
+    <option name="VM_PARAMETERS" value="--enable-native-access=ALL-UNNAMED -XX:+UseCompactObjectHeaders -XX:+UseG1GC -Xms16m -Xmx96m" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>

@@ -1,3 +1,109 @@
 config:
   validation: true
   warningsAsErrors: false
+
+complexity:
+  active: true
+  ComplexCondition:
+    active: true
+    allowedConditions: 4
+  CyclomaticComplexMethod:
+    active: true
+    allowedComplexity: 18
+    ignoreSingleWhenExpression: true
+    ignoreSimpleWhenEntries: true
+  LargeClass:
+    active: true
+    allowedLines: 600
+    excludes:
+      - '**/src/test/**'
+  LongMethod:
+    active: true
+    allowedLines: 75
+    excludes:
+      - '**/src/test/**'
+    ignoreAnnotated:
+      - 'Test'
+  LongParameterList:
+    active: true
+    allowedFunctionParameters: 6
+    allowedConstructorParameters: 8
+    ignoreDefaultParameters: true
+    ignoreDataClasses: true
+  TooManyFunctions:
+    active: true
+    excludes:
+      - '**/src/test/**'
+    allowedFunctionsPerFile: 16
+    allowedFunctionsPerClass: 16
+    allowedFunctionsPerInterface: 16
+    allowedFunctionsPerObject: 16
+    allowedFunctionsPerEnum: 16
+
+coroutines:
+  active: true
+  SuspendFunSwallowedCancellation:
+    active: true
+
+exceptions:
+  active: true
+  SwallowedException:
+    active: true
+  TooGenericExceptionCaught:
+    active: true
+    excludes:
+      - '**/src/test/**'
+
+style:
+  active: true
+  ForbiddenImport:
+    active: true
+    excludes:
+      - '**/kwswitcher-win32/**'
+    forbiddenImports:
+      - value: 'java.lang.foreign.*'
+        reason: 'Panama FFM native bindings are strictly isolated inside kwswitcher-win32.'
+  MagicNumber:
+    active: true
+    excludes:
+      - '**/src/test/**'
+      - '**/*.kts'
+      - '**/bindings/**'
+      - '**/ThemeManager.kt'
+      - '**/SystemTrayController.kt'
+      - '**/WindowListCellRenderer.kt'
+      - '**/SwitcherOverlay.kt'
+      - '**/SyntheticWindowIconPort.kt'
+    ignoreNumbers:
+      - '-1'
+      - '0'
+      - '1'
+      - '2'
+      - '3'
+      - '4'
+      - '8'
+      - '10'
+      - '16'
+      - '24'
+      - '32'
+      - '64'
+      - '100'
+      - '255'
+      - '256'
+      - '1000'
+      - '1024'
+    ignoreHashCodeFunction: true
+  MaxLineLength:
+    active: true
+    maxLineLength: 120
+    excludes:
+      - '**/src/test/**'
+    excludePackageStatements: true
+    excludeImportStatements: true
+    excludeCommentStatements: true
+    excludeRawStrings: true
+  ReturnCount:
+    active: true
+    max: 5
+    excludeGuardClauses: true
+    excludeReturnFromLambda: true

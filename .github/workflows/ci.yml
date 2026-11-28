@@ -30,17 +30,18 @@ jobs:
           java-version: '25'
           cache: maven
 
-      - name: Run tests, Kover coverage, Detekt, and trimmed jpackage build
+      - name: Run tests, Kover coverage, Spotless, zero-baseline Detekt, and trimmed jpackage build
         shell: pwsh
         run: .\mvnw.cmd -B verify -Pjpackage
 
       - name: Verify trimmed native app-image and summarize size
         shell: pwsh
         run: |
-          $exePath = "target\app-image\kwswitcher\kwswitcher.exe"
-          $cfgPath = "target\app-image\kwswitcher\app\kwswitcher.cfg"
-          $releasePath = "target\app-image\kwswitcher\runtime\release"
-          $modulesImagePath = "target\app-image\kwswitcher\runtime\lib\modules"
+          $appImageRoot = "kwswitcher-app\target\app-image\kwswitcher"
+          $exePath = "$appImageRoot\kwswitcher.exe"
+          $cfgPath = "$appImageRoot\app\kwswitcher.cfg"
+          $releasePath = "$appImageRoot\runtime\release"
+          $modulesImagePath = "$appImageRoot\runtime\lib\modules"
 
           if (-not (Test-Path $exePath)) {
             throw "Missing packaged launcher: $exePath"
@@ -69,7 +70,16 @@ jobs:
             throw "Unexpected runtime modules: $($actualModules -join ', ') (expected: $($expectedModules -join ', '))"
           }
 
-          $totalBytes = (Get-ChildItem "target\app-image\kwswitcher" -Recurse -File | Measure-Object -Property Length -Sum).Sum
+          $fatJar = Get-ChildItem "kwswitcher-app\target\*-jar-with-dependencies.jar" | Select-Object -First 1
+          if (-not $fatJar) {
+            throw "Missing executable fat JAR under kwswitcher-app\target"
+          }
+          $helpOutput = & java "--enable-native-access=ALL-UNNAMED" -jar $fatJar.FullName --help
+          if (($helpOutput -join "`n") -notmatch '--sandbox') {
+            throw "Fat JAR --help smoke check did not print expected CLI options"
+          }
+
+          $totalBytes = (Get-ChildItem $appImageRoot -Recurse -File | Measure-Object -Property Length -Sum).Sum
           $totalMb = [math]::Round($totalBytes / 1MB, 2)
           $modulesMb = [math]::Round((Get-Item $modulesImagePath).Length / 1MB, 2)
 
@@ -84,18 +94,63 @@ jobs:
             "| Uncompressed ``app-image`` Size | **${totalMb} MB** |"
           ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
-      - name: Upload Kover coverage report
+      - name: Upload Kover coverage reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: kover-report
-          path: target/site/kover/
+          path: '*/target/site/kover/'
           if-no-files-found: warn
 
-      - name: Upload Detekt static analysis report
+      - name: Upload Detekt static analysis reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: detekt-report
-          path: target/detekt/
+          path: '*/target/detekt/'
           if-no-files-found: warn
+
+  docs-changes:
+    name: Detect Documentation Changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      writerside: ${{ steps.filter.outputs.writerside }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check modified paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            writerside:
+              - 'Writerside/**'
+              - '.github/workflows/docs.yml'
+              - '.github/workflows/ci.yml'
+
+  docs-verify:
+    name: Validate Writerside Documentation
+    needs: docs-changes
+    if: needs.docs-changes.outputs.writerside == 'true'
+    runs-on: ubuntu-latest
+    env:
+      INSTANCE: 'Writerside/kws'
+      ARTIFACT: 'webHelpKWS2-all.zip'
+      DOCKER_VERSION: 'latest'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Writerside documentation
+        uses: JetBrains/writerside-github-action@v4
+        with:
+          instance: ${{ env.INSTANCE }}
+          artifact: ${{ env.ARTIFACT }}
+          docker-version: ${{ env.DOCKER_VERSION }}
+
+      - name: Check documentation build report
+        uses: JetBrains/writerside-checker-action@v1
+        with:
+          instance: ${{ env.INSTANCE }}
