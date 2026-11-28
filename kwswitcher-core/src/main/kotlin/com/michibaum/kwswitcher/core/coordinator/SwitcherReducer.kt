@@ -59,7 +59,9 @@ object SwitcherReducer {
 
         SwitcherIntent.KillSelectedProcess -> reduceKillSelectedProcess(current)
 
-        SwitcherIntent.ConfirmSelection -> reduceConfirmSelection(current)
+        SwitcherIntent.ConfirmSelection -> reduceConfirm(current)
+
+        is SwitcherIntent.ConfirmAtIndex -> reduceConfirm(current = current, targetIndex = intent.index)
 
         is SwitcherIntent.Dismiss -> reduceDismiss(current = current, fromFocusLoss = intent.fromFocusLoss)
 
@@ -261,11 +263,15 @@ object SwitcherReducer {
         )
     }
 
-    private fun reduceConfirmSelection(current: SwitcherUiState): SwitcherReduction {
+    private fun reduceConfirm(current: SwitcherUiState, targetIndex: Int? = null): SwitcherReduction {
         if (current.mode == SwitcherMode.HIDDEN) {
             return SwitcherReduction(state = current)
         }
-        val target = current.selectedWindow
+        val target = if (targetIndex != null) {
+            current.matches.getOrNull(targetIndex)?.window ?: return SwitcherReduction(state = current)
+        } else {
+            current.selectedWindow
+        }
         val hidden = hiddenState(pinned = current.pinned)
         val effects = if (target != null) listOf(SwitcherEffect.ActivateWindow(target)) else emptyList()
         return SwitcherReduction(state = hidden, effects = effects)
