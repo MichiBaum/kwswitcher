@@ -198,6 +198,7 @@
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
                 <configuration>
+                    <skip>false</skip>
                     <executable>java</executable>
                     <arguments>
                         <argument>${jvm.flag.nativeAccess}</argument>
@@ -208,6 +209,13 @@
                         <argument>${jvm.flag.maxPause}</argument>
                         <argument>${jvm.flag.minFree}</argument>
                         <argument>${jvm.flag.maxFree}</argument>
+                        <argument>-Dkwswitcher.mode=${kwswitcher.mode}</argument>
+                        <argument>-Dkwswitcher.noHook=${kwswitcher.noHook}</argument>
+                        <argument>-Dkwswitcher.pinOverlay=${kwswitcher.pinOverlay}</argument>
+                        <argument>-Dkwswitcher.openOnStart=${kwswitcher.openOnStart}</argument>
+                        <argument>-Dkwswitcher.config=${kwswitcher.config}</argument>
+                        <argument>-Dkwswitcher.logLevel=${kwswitcher.logLevel}</argument>
+                        <argument>-Dkwswitcher.selfCheck=${kwswitcher.selfCheck}</argument>
                         <argument>-classpath</argument>
                         <classpath/>
                         <argument>${main.class}</argument>

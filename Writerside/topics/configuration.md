@@ -15,8 +15,8 @@ On a standard Windows installation, this resolves to `C:\Users\<YourUsername>\Ap
 
 * **Developer & custom paths:** Launching with `--dev` isolates settings at `%\LOCALAPPDATA%\kwswitcher-dev\config.json` (defaulting to `Alt + Space` on first creation), and `--config <path>` overrides the configuration file location explicitly.
 * **Automatic creation:** If `config.json` does not exist when `%cmd_name%` starts, it is created automatically with `kotlinx-serialization-json` pretty-printed defaults.
-* **Fault-tolerant parsing with diagnostics:** Omitted fields, unknown future properties, case-insensitive enum names, or malformed regular expressions fall back cleanly to built-in defaults while recording exact parse or regex warnings in `logs\kwswitcher.log` (inspectable via **System Tray -> Open Log Directory** or **Copy Diagnostics**).
-* **Live reload:** After editing `config.json` in any text editor, right-click the system tray icon and click **Reload Config** to apply your changes immediately.
+* **Fault-tolerant parsing with diagnostics & corrupt-file protection:** `ConfigRepository` strips leading UTF-8 BOMs (written by Windows Notepad or PowerShell 5) and accepts `//` line comments, `/* ... */` block comments, trailing commas, omitted fields, unknown future properties, and case-insensitive enum names. If `config.json` contains a syntax error, `%cmd_name%` falls back to defaults for the current session and automatically backs up the broken file to `config.json.corrupt.bak` before saving any System Tray theme change so your custom hotkeys and ignore rules are never overwritten. Exact parse or regex warnings are recorded in `logs\kwswitcher.log` (inspectable via **System Tray -> Open Log Directory** or **Copy Diagnostics**).
+* **Live reload:** After editing `config.json` in any text editor, right-click the system tray icon and click **Reload Config** to apply your changes (and synchronize the System Tray **Theme** checkmark) immediately.
 
 To open the file quickly from PowerShell:
 

@@ -30,16 +30,19 @@ Use the built-in runtime profiles and flags to iterate safely alongside an insta
 | `--open-on-start` | Opens the switcher overlay immediately on startup. |
 | `--config <path>` | Overrides the `config.json` file path. |
 | `--log-level <level>` | Sets log verbosity (`TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`). |
+| `--self-check` | Boots `KwSwitcherBootstrap` in `SANDBOX` mode, verifies Swing/FlatLaf and Panama FFM `Linker` linkage, closes cleanly, and exits `0` (also triggerable via `-Dkwswitcher.selfCheck=true` with `.\mvnw.cmd test-compile exec:exec`). |
 
 ### Shared IntelliJ IDEA Run Configurations (`.run/`)
 
-Opening the repository in IntelliJ IDEA automatically loads five preconfigured run configurations with `--enable-native-access=ALL-UNNAMED` and JDK 25 GC flags already set:
+Opening the repository in IntelliJ IDEA automatically loads seven preconfigured run configurations (five application/test configurations with `--enable-native-access=ALL-UNNAMED` and JDK 25 GC flags already set, plus two Maven build helpers):
 
 1. **`Run UI Sandbox`** — Launches `--sandbox --pin-overlay --log-level DEBUG` with interactive mock windows (safe on any OS, breakpoint-safe).
 2. **`Run Dev Safe (No Hook)`** — Launches `--dev --no-hook --pin-overlay --open-on-start --log-level DEBUG` against real Windows desktop enumeration without installing `WH_KEYBOARD_LL` (breakpoint-safe).
 3. **`Run Dev Live Hook (Alt+Space)`** — Launches `--dev --log-level DEBUG` with a live `Alt + Space` hook and isolated dev mutex/config so your installed `Alt + Tab` switcher keeps running undisturbed.
 4. **`Run All Tests`** — Runs `test` across all Maven modules.
 5. **`Verify Quality Gate`** — Runs `verify` (JUnit 5 + Kover + Spotless + zero-baseline Detekt).
+6. **`clean compile`** — Runs `clean compile` across the full Maven reactor.
+7. **`clean package`** — Runs `clean package` across the full Maven reactor to produce module and fat JARs.
 
 ---
 

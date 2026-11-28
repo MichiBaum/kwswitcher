@@ -60,7 +60,11 @@ You can configure `%cmd_name%` to start automatically whenever you sign in to Wi
 1. Right-click the **%product% (%cmd_name%)** icon in the Windows notification area (system tray).
 2. Click **Run at Windows Startup** so the checkmark is enabled.
 
-Under the hood, `%cmd_name%` writes a `REG_SZ` entry named `kwswitcher` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` pointing to the current executable path. Unchecking **Run at Windows Startup** removes the registry value immediately.
+Under the hood, `%cmd_name%` writes a `REG_SZ` entry named `kwswitcher` under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` pointing to the current native `kwswitcher.exe` launcher path. Unchecking **Run at Windows Startup** removes the registry value immediately.
+
+> **Native launcher required:** **Run at Windows Startup** is enabled when running the packaged `kwswitcher.exe` binary (from the portable `.zip` bundle or `.msi` installer). When launched from the executable fat JAR via `java -jar`, `Win32StartupRegistry` detects `java.exe` / `javaw.exe` and disables startup registration so bare JVM paths are never written to the Windows `Run` key.
+>
+{style="note"}
 
 > If you use the portable `.zip` bundle, move the extracted folder to its final location *before* enabling **Run at Windows Startup**. If you later move the folder, toggle **Run at Windows Startup** off and back on to refresh the registered path.
 >
