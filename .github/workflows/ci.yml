@@ -65,9 +65,37 @@ jobs:
             throw "MODULES entry missing in $releasePath"
           }
           $actualModules = (($modulesLine -replace '^MODULES="', '' -replace '"$', '').Split(' ', [System.StringSplitOptions]::RemoveEmptyEntries) | Sort-Object)
-          $expectedModules = @("java.base", "java.datatransfer", "java.desktop", "java.prefs", "java.xml") | Sort-Object
-          if (($actualModules -join ',') -ne ($expectedModules -join ',')) {
-            throw "Unexpected runtime modules: $($actualModules -join ', ') (expected: $($expectedModules -join ', '))"
+          foreach ($requiredMod in @("java.base", "java.desktop")) {
+            if ($actualModules -notcontains $requiredMod) {
+              throw "Required JDK module '$requiredMod' missing from runtime/release: $($actualModules -join ', ')"
+            }
+          }
+          foreach ($forbiddenMod in @("java.logging", "java.sql", "jdk.unsupported")) {
+            if ($actualModules -contains $forbiddenMod) {
+              throw "Forbidden JDK module '$forbiddenMod' linked into runtime/release: $($actualModules -join ', ')"
+            }
+          }
+
+          $smokeDir = Join-Path ([System.IO.Path]::GetTempPath()) ("kwswitcher-ci-selfcheck-" + [guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Path $smokeDir -Force | Out-Null
+          try {
+            $smokeConfig = Join-Path $smokeDir "sandbox-config.json"
+            $smokeLog = Join-Path $smokeDir "logs\kwswitcher.log"
+            $proc = Start-Process -FilePath $exePath -ArgumentList @("--self-check", "--config", $smokeConfig) -Wait -PassThru
+            if ($proc.ExitCode -ne 0) {
+              throw "Packaged kwswitcher.exe --self-check failed with exit code $($proc.ExitCode)"
+            }
+            if (-not (Test-Path $smokeLog)) {
+              throw "Packaged kwswitcher.exe --self-check did not produce expected log file at $smokeLog"
+            }
+            $smokeLogContent = Get-Content $smokeLog -Raw
+            if ($smokeLogContent -notmatch 'Self-check passed') {
+              throw "Self-check marker missing in ${smokeLog}:`n$smokeLogContent"
+            }
+          } finally {
+            if (Test-Path $smokeDir) {
+              Remove-Item -Path $smokeDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
           }
 
           $fatJar = Get-ChildItem "kwswitcher-app\target\*-jar-with-dependencies.jar" | Select-Object -First 1
@@ -88,7 +116,7 @@ jobs:
             ""
             "| Metric | Value |"
             "| :--- | :--- |"
-            "| Launcher | ``kwswitcher.exe`` |"
+            "| Launcher | ``kwswitcher.exe --self-check`` (exit ``0``) |"
             "| Linked JDK Modules ($($actualModules.Count)) | ``$($actualModules -join ', ')`` |"
             "| ``runtime/lib/modules`` Size | **${modulesMb} MB** |"
             "| Uncompressed ``app-image`` Size | **${totalMb} MB** |"

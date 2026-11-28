@@ -7,10 +7,10 @@
 All Win32 downcall `MethodHandle` bindings, C struct `MemoryLayout` definitions, `VarHandle` field accessors, and callback `FunctionDescriptor` declarations are isolated inside the `kwswitcher-win32` module (`com.michibaum.kwswitcher.win32.bindings.*`):
 
 * **Subsystem Binding Holders (`@JvmField` for HotSpot C2 Inlining):**
-    * `PanamaNative` — shared `Linker`, `Arena.global()`, lazy DLL `SymbolLookup`s, and `Arena.allocateWideString` / `MemorySegment.readWideString` UTF-16 helpers.
+    * `PanamaNative` — shared `Linker`, `Arena.global()`, lazy DLL `SymbolLookup`s, `Linker.Option.captureCallState("GetLastError")` helpers (`downcallCapturingLastError`), and `Arena.allocateWideString` / `MemorySegment.readWideString` UTF-16 helpers.
     * `Win32Constants` & `Win32Structs` — ABI-verified 64-bit Windows struct layouts (`KBDLLHOOKSTRUCT`, `MSG`, `INPUT`, `POINT`, `RECT`, `MONITORINFO`, `ICONINFO`, `BITMAP`, `BITMAPINFOHEADER`) and pre-bound `VarHandle`s with zero DLL initialization side effects.
     * `MutexNative`, `HookNative`, `WindowEnumNative`, `WindowControlNative`, `GdiIconNative`, and `RegistryNative` — lazy `internal object`s exposing `@JvmField val` `MethodHandle`s across `user32.dll`, `kernel32.dll`, `dwmapi.dll`, `gdi32.dll`, and `advapi32.dll`.
-* **Zero-Boxing Invocation & Structured Diagnostics:** Every native call uses `MethodHandle.invokeExact(...)` against precomputed `FunctionDescriptor` layouts, while `Win32ErrorFormatter` decodes `GetLastError()` and registry status codes via `FormatMessageW` into structured `NativeResult.Failed` diagnostics.
+* **Zero-Boxing Invocation, Atomic `GetLastError` Capture & Upcall Safety:** Every native call uses `MethodHandle.invokeExact(...)` against precomputed `FunctionDescriptor` layouts. Error-sensitive Win32 downcalls capture `GetLastError` atomically at the FFM boundary via `Linker.Option.captureCallState("GetLastError")` into `Win32ErrorFormatter.describeError`, and Panama upcall targets (`WH_KEYBOARD_LL` and `EnumWindowsProc`) contain top-level `Exception` guards so callback failures never abort the JVM.
 
 ## Five Critical Win32 & Panama Edge-Case Mitigations
 
@@ -21,7 +21,7 @@ Desktop window managers on Windows face subtle OS traps—from frozen GUI messag
 Choosing the wrong `Arena` scope in `java.lang.foreign` causes either premature use-after-free crashes or native memory leaks:
 
 * **Short-lived native buffers (`Arena.ofConfined()`):** Temporary structs and UTF-16 buffers (`POINT`, `MONITORINFO`, `ICONINFO`, `BITMAPINFOHEADER`, `INPUT[]`, registry strings, and `Win32WindowEnumerator.ReusableScratch`) are allocated inside `Arena.ofConfined().use { arena -> ... }`. Native memory is freed deterministically the instant the lexical block exits—generating zero GC pressure.
-* **Persistent hook upcall (`Arena.ofShared()`):** `Win32KeyboardHook` allocates its `LowLevelKeyboardProc` upcall stub inside an `Arena.ofShared()` owned by the hook thread. On shutdown, `Win32KeyboardHook.close()` posts `WM_QUIT` (`PostThreadMessageW`), guarantees `UnhookWindowsHookEx` runs in `finally`, and only then exits the `Arena.ofShared().use` block so Windows can never invoke a freed function pointer.
+* **Persistent hook upcall (`Arena.ofShared()`):** `Win32KeyboardHook` allocates its `LowLevelKeyboardProc` upcall stub inside an `Arena.ofShared()` owned by the hook thread and pre-creates the thread's Win32 message queue via `PeekMessageW(..., PM_NOREMOVE)` before unblocking `start()`. On shutdown, `Win32KeyboardHook.close()` posts `WM_QUIT` (`PostThreadMessageW`), guarantees `UnhookWindowsHookEx` runs in `finally`, and only then exits the `Arena.ofShared().use` block so Windows can never invoke a freed function pointer.
 * **Zero-allocation enumeration callback (`Arena.global()` + `ThreadLocal`):** Rather than allocating a fresh native upcall stub on every `Alt+Tab` press, `Win32WindowEnumerator.UpcallBridge` binds a single `EnumWindowsProc` stub in `Arena.global()` and dispatches to the active call's `WindowVisitor` via a `ThreadLocal` cleared in `finally`.
 
 ### 2. Non-Blocking Icon Extraction on Hung Windows (`SMTO_ABORTIFHUNG`)
@@ -57,8 +57,8 @@ Windows **User Interface Privilege Isolation (UIPI)** isolates lower-integrity p
 
 Long-running tray utilities must never leak kernel handles or GDI objects across thousands of invocations:
 
-* **Process & Mutex Handles:** Every `HANDLE` returned by `OpenProcess` (`Win32WindowEnumerator.queryProcessImagePath` and `Win32WindowActivator.terminateProcess`) is closed via `CloseHandle` inside a `try / finally` block. `Win32SingleInstanceMutex.close()` releases and closes the named mutex (`ReleaseMutex` + `CloseHandle`) via `RunningAppSession.close()`.
-* **GDI Bitmaps & Device Contexts:** `GetIconInfo` allocates *new* `HBITMAP` copies (`hbmMask` and `hbmColor`) that the caller owns. `HIconDibDecoder.convertHIconToImage()` extracts 32-bit top-down ARGB pixels via `CreateCompatibleDC` + `GetDIBits` and unconditionally calls `DeleteDC(hdc)`, `DeleteObject(hbmMask)`, and `DeleteObject(hbmColor)` in `finally`.
+* **Process & Mutex Handles:** Every `HANDLE` returned by `OpenProcess` (`Win32WindowEnumerator.queryProcessImagePath` and `Win32WindowActivator.terminateProcess`) is closed via `CloseHandle` inside a `try / finally` block. `Win32SingleInstanceMutex` creates an unowned (`bInitialOwner = 0`) named kernel mutex verified via captured `ERROR_ALREADY_EXISTS` and closes it safely from any thread via `CloseHandle`.
+* **GDI Bitmaps & Device Contexts:** `GetIconInfo` allocates *new* `HBITMAP` copies (`hbmMask` and `hbmColor`) that the caller owns. `HIconDibDecoder.convertHIconToImage()` extracts 32-bit top-down ARGB pixels via `CreateCompatibleDC` + `GetDIBits` (including decoding `2x`-height stacked AND/XOR masks for monochrome icons where `hbmColor == NULL`) and unconditionally calls `DeleteDC(hdc)`, `DeleteObject(hbmMask)`, and `DeleteObject(hbmColor)` in `finally`.
 
 <seealso>
     <category ref="developer-guide">

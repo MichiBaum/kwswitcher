@@ -25,10 +25,13 @@ Auto-format Kotlin sources with **Spotless (`ktlint`)** and run the full verific
 
 ## Run & Debug Locally
 
-Launch `kwswitcher` from source (production profile):
+Launch `kwswitcher` directly from the Maven reactor (compiles all modules from live source without requiring `mvn install`):
 
 ```powershell
-.\mvnw.cmd test-compile exec:exec -pl kwswitcher-app
+.\mvnw.cmd test-compile exec:exec
+
+# Or run a deterministic non-interactive runtime & Panama FFM linkage check:
+.\mvnw.cmd test-compile exec:exec "-Dkwswitcher.selfCheck=true"
 ```
 
 For safe local development alongside an installed instance (or breakpoint-safe UI debugging without installing `WH_KEYBOARD_LL`), use the shared IntelliJ IDEA configurations in `.run/` or pass CLI flags:

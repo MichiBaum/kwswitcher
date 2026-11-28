@@ -33,8 +33,11 @@ This guide covers building and testing %product% (`%cmd_name%`) locally with Mav
 Pausing at an IntelliJ IDEA breakpoint while `WH_KEYBOARD_LL` is active stalls OS-wide keyboard input until Windows' `LowLevelHooksTimeout`. Open the repository in IntelliJ IDEA to use the pre-shared `.run/` configurations (`Run UI Sandbox`, `Run Dev Safe (No Hook)`, `Run Dev Live Hook (Alt+Space)`), or launch from the CLI:
 
 ```powershell
-# Launch production mode from Maven:
-.\mvnw.cmd test-compile exec:exec -pl kwswitcher-app
+# Launch production mode from the root Maven reactor (compiles all modules from live source):
+.\mvnw.cmd test-compile exec:exec
+
+# Run deterministic sandbox & Panama FFM linkage verification and exit 0:
+.\mvnw.cmd test-compile exec:exec "-Dkwswitcher.selfCheck=true"
 
 # Launch cross-platform interactive UI sandbox (no native hook, pinned overlay):
 java --enable-native-access=ALL-UNNAMED -jar kwswitcher-app\target\kwswitcher-%version%-jar-with-dependencies.jar --sandbox --pin-overlay
@@ -74,7 +77,7 @@ Stages runtime dependencies and invokes `jpackage --type app-image` (`--add-modu
 .\mvnw.cmd package -Pjpackage
 ```
 
-Launch `kwswitcher-app\target\app-image\kwswitcher\kwswitcher.exe` directly—no external Java installation required.
+Launch `kwswitcher-app\target\app-image\kwswitcher\kwswitcher.exe` directly—no external Java installation required. Pass `--self-check` (`kwswitcher.exe --self-check`) to smoke-test the trimmed `jlink` runtime non-interactively (as executed in CI).
 
 </tab>
 <tab title="Windows MSI Installer">
