@@ -8,6 +8,7 @@ import java.awt.AWTException
 import java.awt.BasicStroke
 import java.awt.CheckboxMenuItem
 import java.awt.Color
+import java.awt.EventQueue
 import java.awt.HeadlessException
 import java.awt.Menu
 import java.awt.MenuItem
@@ -51,15 +52,23 @@ class SystemTrayController(
     private val startupPort: StartupRegistrationPort = InMemoryStartupPort(),
     private val visualStyle: TrayVisualStyle = TrayVisualStyle.PRODUCTION,
     private val diagnostics: TrayDiagnosticsCallbacks = TrayDiagnosticsCallbacks(),
+    private val backgroundExecutor: (Runnable) -> Unit = { task -> Thread.ofVirtual().start(task) },
+    private val uiExecutor: (Runnable) -> Unit = EventQueue::invokeLater,
 ) : AutoCloseable {
 
     private var trayIcon: TrayIcon? = null
     private var pinMenuItem: CheckboxMenuItem? = null
+    internal var startupMenuItem: CheckboxMenuItem? = null
+    internal var themeItems: Map<ThemeOption, CheckboxMenuItem> = emptyMap()
 
     /**
      * Installs the system tray icon if supported by the current desktop environment.
+     * Calling [install] when already installed is an idempotent no-op returning `true`.
      */
     fun install(initialTheme: ThemeOption = ThemeOption.SYSTEM): Boolean {
+        if (trayIcon != null) {
+            return true
+        }
         if (!SystemTray.isSupported()) {
             logger.info { "SystemTray is not supported in this desktop environment" }
             return false
@@ -94,7 +103,16 @@ class SystemTrayController(
         pinMenuItem?.state = pinned
     }
 
-    private fun buildPopupMenu(initialTheme: ThemeOption): PopupMenu {
+    /**
+     * Synchronizes the "Theme" radio-style checkmarks with [theme] (e.g., after reloading `config.json`).
+     */
+    fun updateSelectedTheme(theme: ThemeOption) {
+        for ((option, item) in themeItems) {
+            item.state = (option == theme)
+        }
+    }
+
+    internal fun buildPopupMenu(initialTheme: ThemeOption = ThemeOption.SYSTEM): PopupMenu {
         val popup = PopupMenu()
         popup.add(MenuItem("Show Switcher").apply { addActionListener { onShowSwitcher() } })
         popup.add(MenuItem("Reload Config").apply { addActionListener { onReloadConfig() } })
@@ -109,30 +127,51 @@ class SystemTrayController(
         }
 
         popup.addSeparator()
-        val startupItem = CheckboxMenuItem("Run at Windows Startup", startupPort.isRegistered()).apply {
+        val currentlyRegistered = startupPort.isRegistered()
+        val startupItem = CheckboxMenuItem("Run at Windows Startup", currentlyRegistered).apply {
+            isEnabled = startupPort.isSupported || currentlyRegistered
             addItemListener {
-                val enabled = state
-                if (!startupPort.setRegistered(enabled)) {
-                    state = !enabled
-                }
+                handleStartupToggle(this)
             }
         }
+        startupMenuItem = startupItem
         popup.add(startupItem)
         popup.addSeparator()
         popup.add(MenuItem("Quit").apply { addActionListener { onQuit() } })
         return popup
     }
 
+    internal fun handleStartupToggle(item: CheckboxMenuItem) {
+        val desiredState = item.state
+        backgroundExecutor(
+            Runnable {
+                val ok = startupPort.setRegistered(desiredState)
+                if (!ok) {
+                    uiExecutor(
+                        Runnable {
+                            item.state = !desiredState
+                        },
+                    )
+                } else if (!desiredState && !startupPort.isSupported) {
+                    uiExecutor(
+                        Runnable {
+                            item.isEnabled = false
+                        },
+                    )
+                }
+            },
+        )
+    }
+
     private fun buildThemeMenu(initialTheme: ThemeOption): Menu {
         val themeMenu = Menu("Theme")
-        val themeItems = ThemeOption.entries.associateWith { option ->
+        val items = ThemeOption.entries.associateWith { option ->
             CheckboxMenuItem(option.name.lowercase().replaceFirstChar(Char::uppercase), option == initialTheme)
         }
-        for ((option, item) in themeItems) {
+        themeItems = items
+        for ((option, item) in items) {
             item.addItemListener {
-                for ((otherOpt, otherItem) in themeItems) {
-                    otherItem.state = (otherOpt == option)
-                }
+                updateSelectedTheme(option)
                 onSelectTheme(option)
             }
             themeMenu.add(item)
@@ -157,9 +196,14 @@ class SystemTrayController(
     }
 
     override fun close() {
-        val icon = trayIcon ?: return
+        val icon = trayIcon
         trayIcon = null
         pinMenuItem = null
+        startupMenuItem = null
+        themeItems = emptyMap()
+        if (icon == null) {
+            return
+        }
         try {
             if (SystemTray.isSupported()) {
                 SystemTray.getSystemTray().remove(icon)

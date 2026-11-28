@@ -3,6 +3,8 @@ package com.michibaum.kwswitcher.core.config
 import com.michibaum.kwswitcher.core.ui.WindowListCellRenderer
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Path
+import kotlin.io.path.exists
+import kotlin.io.path.readText
 import kotlin.io.path.writeText
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -90,6 +92,73 @@ class ConfigRepositoryTest {
         assertEquals(1, loaded.warnings.size)
         assertTrue(loaded.warnings.first().contains("[unclosed-bracket"))
         assertTrue(loaded.config.isIgnored(processName = "any", title = "Valid"))
+    }
+
+    @Test
+    fun `ConfigRepository parses UTF-8 BOM line and block comments and trailing commas`(@TempDir tempDir: Path) {
+        val file = tempDir.resolve("config.json")
+        val notepadEditedJson = "\uFEFF" +
+            """
+            {
+              // User-customized hotkey from Windows Notepad
+              "hotkey": {
+                "modifier": "ALT",
+                "triggerKey": "SPACE",
+                "reverseModifier": "SHIFT",
+              },
+              /* Multi-line comment explaining theme and ignore rules */
+              "theme": "DARK",
+              "ignoredProcesses": [
+                "Spotify.exe",
+                "TextInputHost.exe",
+              ],
+            }
+            """.trimIndent()
+        file.writeText(notepadEditedJson)
+
+        val repo = ConfigRepository(configPath = file)
+        val loaded = assertIs<ConfigLoadResult.Loaded>(repo.loadResult())
+        assertEquals("SPACE", loaded.config.hotkey.triggerKey)
+        assertEquals(ThemeOption.DARK, loaded.config.theme)
+        assertEquals(listOf("Spotify.exe", "TextInputHost.exe"), loaded.config.ignoredProcesses)
+    }
+
+    @Test
+    fun `ConfigRepository backs up corrupt config once before save and clears flag after valid reload`(
+        @TempDir tempDir: Path,
+    ) {
+        val configFile = tempDir.resolve("config.json")
+        val brokenCustomContent = "{ \"hotkey\": { \"triggerKey\": \"SPACE\" ,, broken syntax!"
+        configFile.writeText(brokenCustomContent)
+
+        val repo = ConfigRepository(configPath = configFile)
+        val backupFile = repo.resolveCorruptBackupPath()
+        assertEquals(tempDir.resolve("config.json.corrupt.bak"), backupFile)
+
+        assertIs<ConfigLoadResult.FallbackOnError>(repo.loadResult())
+        assertFalse(backupFile.exists())
+
+        // First save (e.g. tray theme switch) preserves broken custom file in config.json.corrupt.bak
+        repo.save(SwitcherConfig(theme = ThemeOption.LIGHT))
+        assertTrue(backupFile.exists())
+        assertEquals(brokenCustomContent, backupFile.readText())
+        assertEquals(ThemeOption.LIGHT, assertIs<ConfigLoadResult.Loaded>(repo.loadResult()).config.theme)
+
+        // Subsequent save does NOT clobber config.json.corrupt.bak with the valid LIGHT JSON
+        repo.save(SwitcherConfig(theme = ThemeOption.DARK))
+        assertEquals(brokenCustomContent, backupFile.readText())
+        assertEquals(ThemeOption.DARK, assertIs<ConfigLoadResult.Loaded>(repo.loadResult()).config.theme)
+
+        // If a broken load is fixed externally and reloaded before save(), no backup is written
+        val secondConfigFile = tempDir.resolve("second-config.json")
+        secondConfigFile.writeText("{ broken")
+        val secondRepo = ConfigRepository(configPath = secondConfigFile)
+        assertIs<ConfigLoadResult.FallbackOnError>(secondRepo.loadResult())
+
+        secondConfigFile.writeText("""{"theme": "LIGHT"}""")
+        assertIs<ConfigLoadResult.Loaded>(secondRepo.loadResult())
+        secondRepo.save(SwitcherConfig(theme = ThemeOption.SYSTEM))
+        assertFalse(secondRepo.resolveCorruptBackupPath().exists())
     }
 
     @Test
